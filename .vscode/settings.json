@@ -1,0 +1,14 @@
+{
+  "editor.tabSize": 2,
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "files.exclude": {
+    "node_modules": true
+  },
+  "emmet.includeLanguages": {
+    "javascript": "html"
+  },
+  "files.watcherExclude": {
+    "**/target": true
+  }
+}
