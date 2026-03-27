@@ -333,6 +333,8 @@ ${userHTML}
       card.style.setProperty('position', 'relative', 'important');
     }
     card.classList.add('qb-wrap');
+
+    // "Edit SQL" button
     var btn = document.createElement('button');
     btn.className = 'qb-edit-btn';
     btn.textContent = 'Edit SQL';
@@ -341,6 +343,54 @@ ${userHTML}
       window.parent.postMessage({ type: 'quackboard_view_query', queryName: queryName }, '*');
     });
     card.appendChild(btn);
+
+    // "Style" button
+    var styleBtn = document.createElement('button');
+    styleBtn.className = 'qb-style-btn';
+    styleBtn.textContent = 'Style';
+    styleBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+
+      var info = { queryName: queryName, type: 'chart', hasLegend: true };
+
+      // Detect visual type
+      if (card.querySelector('table')) {
+        info.type = 'table';
+      } else if (!card.querySelector('canvas')) {
+        info.type = 'kpi';
+      }
+
+      // Chart details
+      if (info.type === 'chart') {
+        var canvas = card.querySelector('canvas');
+        if (canvas) {
+          var ch = typeof Chart !== 'undefined' && Chart.getChart ? Chart.getChart(canvas) : null;
+          if (ch) {
+            info.chartType = ch.config.type || 'bar';
+            var ds = ch.data && ch.data.datasets && ch.data.datasets[0];
+            if (ds) {
+              var rawColor = ds.backgroundColor || ds.borderColor || '#e85d24';
+              if (Array.isArray(rawColor)) rawColor = rawColor[0];
+              info.currentColor = typeof rawColor === 'string' ? rawColor : '#e85d24';
+            }
+            info.hasLegend = ch.options && ch.options.plugins && ch.options.plugins.legend
+              ? ch.options.plugins.legend.display !== false
+              : true;
+          }
+        }
+      }
+
+      // Card styles
+      var cs = window.getComputedStyle(card);
+      info.currentBg     = rgbToHex(cs.backgroundColor) || '#ffffff';
+      info.currentRadius = parseInt(cs.borderRadius) || 12;
+
+      document.querySelectorAll('.qb-selected').forEach(function(el) { el.classList.remove('qb-selected'); });
+      card.classList.add('qb-selected');
+
+      window.parent.postMessage({ type: 'quackboard_select_visual', info: info }, '*');
+    });
+    card.appendChild(styleBtn);
   }
 
   // ── Attach buttons ────────────────────────────────────────────
@@ -402,62 +452,9 @@ ${userHTML}
       if (candidateCards[i]) attachBtn(candidateCards[i], q);
     });
 
-    // ── Add "Style" button and selection to every [data-qb-query] card ──
-    document.querySelectorAll('[data-qb-query]').forEach(function(card) {
-      if (card.__qbStyleBtn) return;
-      card.__qbStyleBtn = true;
-
-      // "Style" button (sits next to "Edit SQL")
-      var styleBtn = document.createElement('button');
-      styleBtn.className = 'qb-style-btn';
-      styleBtn.textContent = 'Style';
-      if (window.getComputedStyle(card).position === 'static') {
-        card.style.setProperty('position', 'relative', 'important');
-      }
-      card.appendChild(styleBtn);
-
-      styleBtn.addEventListener('click', function(e) {
-        e.stopPropagation();
-        var queryName = card.getAttribute('data-qb-query');
-        var canvas = card.querySelector('canvas');
-        var table  = card.querySelector('table');
-
-        var info = { queryName: queryName, type: 'kpi' };
-
-        if (canvas) {
-          info.type = 'chart';
-          var chart = window.Chart && window.Chart.getChart && window.Chart.getChart(canvas);
-          if (chart) {
-            var ds0 = chart.data.datasets && chart.data.datasets[0];
-            var rawColor = ds0 ? (ds0.borderColor || ds0.backgroundColor) : null;
-            // Normalise to a hex string if possible
-            info.chartType = chart.config.type === 'line' && ds0 && ds0.fill ? 'area' : chart.config.type;
-            info.currentColor = typeof rawColor === 'string' && rawColor.match(/^#[0-9a-f]{6}/i)
-              ? rawColor : '#e85d24';
-            info.hasLegend = !!(chart.options.plugins && chart.options.plugins.legend
-              && chart.options.plugins.legend.display !== false);
-            info.hasMultipleDatasets = chart.data.datasets.length > 1;
-          }
-        } else if (table) {
-          info.type = 'table';
-        }
-
-        // Current card styles
-        var cs = window.getComputedStyle(card);
-        info.currentBg     = rgbToHex(cs.backgroundColor) || '#ffffff';
-        info.currentRadius = parseInt(cs.borderRadius) || 12;
-
-        // Highlight selected card
-        document.querySelectorAll('.qb-selected').forEach(function(el) { el.classList.remove('qb-selected'); });
-        card.classList.add('qb-selected');
-
-        window.parent.postMessage({ type: 'quackboard_select_visual', info: info }, '*');
-      });
-    });
-
-    // Deselect on outside click
+    // Deselect on outside click (click on non-card area)
     document.addEventListener('click', function(e) {
-      if (!e.target.closest('[data-qb-query]')) {
+      if (!e.target.closest('.qb-wrap')) {
         document.querySelectorAll('.qb-selected').forEach(function(el) { el.classList.remove('qb-selected'); });
         window.parent.postMessage({ type: 'quackboard_deselect_visual' }, '*');
       }
