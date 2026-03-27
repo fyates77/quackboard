@@ -65,10 +65,20 @@ Respond with ONLY a JSON object (no markdown, no backticks, no explanation). The
    - Include a <style> tag at the top for all CSS.
    - Include a <script> tag at the bottom for all JavaScript.
    - Use modern CSS (grid, flexbox). Make it responsive within the preview pane.
+   - REQUIRED: Every visual card element (chart wrapper, table wrapper, KPI card, etc.) MUST have a
+     data-qb-query attribute set to the query name it is backed by.
+     Example: <div class="card" data-qb-query="monthly_revenue">...</div>
+     The value must exactly match the key in the "queries" object for that page.
+     Every declared query must have exactly one matching data-qb-query element.
 
 3. DATA BINDING: Pre-fetched query results are available immediately as window.quackboard.data[queryName].
    Each result has shape: { columns: string[], rows: any[][] }
+   All numeric columns will always be JS numbers (never strings). Null cells are JS null.
    - ALWAYS use window.quackboard.data to render the initial page — no async needed for declared queries.
+   - ALWAYS guard against empty or failed data before rendering. Every chart/table must begin with:
+       const d = window.quackboard.data.my_query;
+       if (!d || d.rows.length === 0) { /* show empty message */ return; }
+   - Never assume rows is non-empty. Never index row[0] without checking length first.
    - window.quackboard.query(sql) → Promise<{columns, rows}> — use ONLY for user-triggered interactions
      (filter changes, search, drill-downs). The SQL must still do all aggregation; never reduce results in JS.
    - window.quackboard.navigate(pageId, params) → navigates to another page
@@ -162,6 +172,9 @@ Return the complete updated dashboard JSON (all pages, even unchanged ones).`;
     return project;
   } catch (err) {
     console.error('Failed to parse AI response:', cleaned);
+    if (err.message.includes('Unterminated') || err.message.includes('Unexpected end')) {
+      throw new Error('Response was cut off — the dashboard was too large. Try a simpler prompt or fewer charts.');
+    }
     throw new Error(`AI returned invalid JSON: ${err.message}`);
   }
 }
@@ -180,7 +193,7 @@ async function callAnthropic(systemPrompt, messages, options) {
     },
     body: JSON.stringify({
       model: options.model || 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
+      max_tokens: 16000,
       system: systemPrompt,
       messages: messages,
     }),
@@ -214,7 +227,7 @@ async function callOpenAI(systemPrompt, messages, options) {
         { role: 'system', content: systemPrompt },
         ...messages,
       ],
-      max_tokens: 8192,
+      max_tokens: 16000,
       temperature: 0.3,
     }),
   });
@@ -229,17 +242,53 @@ async function callOpenAI(systemPrompt, messages, options) {
 }
 
 /**
- * Basic validation of the generated project structure.
+ * Validate and normalise the generated project structure.
+ * Throws a descriptive error on any structural problem.
  */
-function validateProject(project) {
-  if (!project.pages || !Array.isArray(project.pages) || project.pages.length === 0) {
+export function validateProject(project) {
+  if (!project || typeof project !== 'object') {
+    throw new Error('Project must be an object.');
+  }
+  if (!Array.isArray(project.pages) || project.pages.length === 0) {
     throw new Error('Project must have at least one page.');
   }
+
+  const pageIds = new Set();
   for (const page of project.pages) {
-    if (!page.id) throw new Error('Each page needs an id.');
-    if (!page.html) throw new Error(`Page "${page.id}" is missing html.`);
-    if (!page.queries || typeof page.queries !== 'object') {
-      throw new Error(`Page "${page.id}" is missing queries object.`);
+    if (!page.id || typeof page.id !== 'string') throw new Error('Each page needs a string id.');
+    if (pageIds.has(page.id)) throw new Error(`Duplicate page id: "${page.id}".`);
+    pageIds.add(page.id);
+
+    if (!page.html || typeof page.html !== 'string') {
+      throw new Error(`Page "${page.id}" is missing html.`);
     }
+
+    // queries must be a plain object (not null, not array) with string values
+    if (!page.queries || Array.isArray(page.queries) || typeof page.queries !== 'object') {
+      throw new Error(`Page "${page.id}" is missing a queries object.`);
+    }
+    for (const [name, sql] of Object.entries(page.queries)) {
+      if (typeof sql !== 'string' || !sql.trim()) {
+        throw new Error(`Query "${name}" on page "${page.id}" must be a non-empty SQL string.`);
+      }
+    }
+
+    // Fill optional fields so downstream code can always rely on them
+    page.title = page.title || page.id;
+    page.description = page.description || '';
+  }
+
+  // Validate navigation references
+  if (Array.isArray(project.navigation)) {
+    for (const nav of project.navigation) {
+      if (nav.from && !pageIds.has(nav.from)) {
+        throw new Error(`Navigation references unknown page "${nav.from}".`);
+      }
+      if (nav.to && !pageIds.has(nav.to)) {
+        throw new Error(`Navigation references unknown page "${nav.to}".`);
+      }
+    }
+  } else {
+    project.navigation = [];
   }
 }

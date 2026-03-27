@@ -5,6 +5,8 @@
  * manages page switching, and handles save/load to localStorage.
  */
 
+import { validateProject } from './ai.js';
+
 const STORAGE_KEY = 'quackboard_project';
 
 let currentProject = null;
@@ -136,13 +138,16 @@ export function loadFromStorage() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
-      currentProject = JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+      validateProject(parsed); // throws if structure is invalid/outdated
+      currentProject = parsed;
       currentPageIndex = 0;
       notify();
       return true;
     }
   } catch (err) {
-    console.warn('Failed to load project from localStorage:', err);
+    console.warn('Discarding saved project (failed validation):', err.message);
+    localStorage.removeItem(STORAGE_KEY);
   }
   return false;
 }

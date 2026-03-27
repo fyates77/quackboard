@@ -10,6 +10,28 @@ import * as duckdb from '@duckdb/duckdb-wasm';
 
 BigInt.prototype.toJSON = function() { return Number(this); };
 
+/**
+ * Normalize an Arrow/DuckDB cell value to a plain JSON-safe JS primitive.
+ * Arrow returns proxy objects for many types; this unwraps them cleanly.
+ */
+function normalizeValue(v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v === 'bigint') return Number(v);
+  if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') return v;
+  if (v instanceof Date) return v.toISOString();
+  // Arrow Int64, Decimal, etc. expose toNumber()
+  if (typeof v.toNumber === 'function') return v.toNumber();
+  // Fallback: valueOf() for any other boxed primitive
+  if (typeof v.valueOf === 'function') {
+    const prim = v.valueOf();
+    if (prim !== v && typeof prim !== 'object') return prim;
+  }
+  // Arrow List / nested types
+  if (Array.isArray(v)) return v.map(normalizeValue);
+  // Last resort: string representation
+  return String(v);
+}
+
 let db = null;
 let conn = null;
 
@@ -110,7 +132,7 @@ export async function loadFile(file, tableName) {
   const sampleRows = sampleResult.toArray().map(row => {
     const obj = {};
     for (const col of columns) {
-      obj[col.name] = row[col.name];
+      obj[col.name] = normalizeValue(row[col.name]);
     }
     return obj;
   });
@@ -129,9 +151,9 @@ export async function runQuery(sql) {
 
   const result = await conn.query(sql);
   const schema = result.schema.fields.map(f => f.name);
-  const rows = result.toArray().map(row => {
-    return schema.map(col => row[col]);
-  });
+  const rows = result.toArray().map(row =>
+    schema.map(col => normalizeValue(row[col]))
+  );
 
   return { columns: schema, rows };
 }

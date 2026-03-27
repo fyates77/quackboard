@@ -18,15 +18,23 @@ let currentPageIndex = 0;
  *
  * @param {HTMLElement} el - Where to mount
  * @param {function} onNavigate - Called when a page switch is requested
- * @param {function} onViewQuery - Called when user clicks "View query" on a visual
+ * @param {function} onViewQuery - Called when user clicks "Edit SQL" on a visual
+ * @param {function} onToggleEditor - Called when the editor toggle button is clicked
+ * @param {function} onToggleQuickEdit - Called when the Quick Edit button is clicked
  */
-export function mountPreviewPanel(el, onNavigate, onViewQuery) {
+export function mountPreviewPanel(el, onNavigate, onViewQuery, onToggleEditor, onToggleQuickEdit, onSelectVisual) {
   container = el;
   onPageSwitch = onNavigate;
 
   container.innerHTML = `
     <div class="preview-toolbar">
       <div class="preview-toolbar-group">
+        <button class="editor-toggle-btn" id="editor-toggle-btn" title="Show/hide editor">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <polyline points="9 18 15 12 9 6"/>
+          </svg>
+        </button>
         <div class="page-tabs" id="page-tabs"></div>
       </div>
       <div class="preview-toolbar-group">
@@ -41,15 +49,41 @@ export function mountPreviewPanel(el, onNavigate, onViewQuery) {
 
   iframe = container.querySelector('#preview-iframe');
 
+  container.querySelector('#editor-toggle-btn').addEventListener('click', () => {
+    if (onToggleEditor) onToggleEditor();
+  });
+
   // Initialise the sandbox bridge
   initSandbox(iframe, (pageId, params) => {
     if (onPageSwitch) onPageSwitch(pageId, params);
   }, (queryName) => {
     if (onViewQuery) onViewQuery(queryName);
+  }, (info) => {
+    if (onSelectVisual) onSelectVisual(info);
   });
 
   // Show empty state initially
   showEmptyState();
+}
+
+/**
+ * Update the editor toggle button icon direction based on editor visibility.
+ *
+ * @param {boolean} editorVisible
+ */
+export function setEditorToggleState(editorVisible) {
+  const btn = document.getElementById('editor-toggle-btn');
+  if (!btn) return;
+  // Point right (show) when editor is hidden, point left (hide) when visible
+  btn.innerHTML = editorVisible
+    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+         <polyline points="15 18 9 12 15 6"/>
+       </svg>`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+         <polyline points="9 18 15 12 9 6"/>
+       </svg>`;
 }
 
 /**
@@ -63,10 +97,8 @@ export async function renderProject(project, pageIndex = 0, params = {}) {
   currentProject = project;
   currentPageIndex = pageIndex;
 
-  // Render page tabs
   renderPageTabs();
 
-  // Render the current page
   const page = project.pages[pageIndex];
   if (page) {
     setStatus('loading', 'Rendering...');

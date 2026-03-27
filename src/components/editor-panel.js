@@ -1,9 +1,8 @@
 /**
  * Editor panel component.
  *
- * A tabbed code editor (HTML, SQL) powered by CodeMirror 6.
- * Users can manually edit the AI-generated code, and changes
- * are reflected live in the preview.
+ * HTML editor with collapse/expand toggle.
+ * SQL editing is handled per-visualization via the SQL drawer (see mountSQLDrawer).
  */
 
 import { EditorView, basicSetup } from 'codemirror';
@@ -12,86 +11,63 @@ import { sql } from '@codemirror/lang-sql';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorState } from '@codemirror/state';
 
+// ─── HTML editor state ────────────────────────────────────────
+
 let container = null;
-let currentTab = 'html';
 let editorView = null;
 let currentPage = null;
 let onHTMLChange = null;
-let onSQLChange = null;
 let changeTimeout = null;
 
+// ─── SQL drawer state ─────────────────────────────────────────
+
+let drawerEl = null;
+let drawerEditorView = null;
+let drawerQueryName = null;
+let onSQLApply = null;
+
 /**
- * Create and mount the editor panel.
+ * Create and mount the editor panel (HTML only).
  *
  * @param {HTMLElement} el - Where to mount
- * @param {object} callbacks - { onHTMLChange, onSQLChange }
+ * @param {object} callbacks - { onHTMLChange, onCollapse }
  */
 export function mountEditorPanel(el, callbacks) {
   container = el;
   onHTMLChange = callbacks.onHTMLChange;
-  onSQLChange = callbacks.onSQLChange;
 
   container.innerHTML = `
     <div class="editor-tabs">
-      <button class="editor-tab active" data-tab="html">HTML</button>
-      <button class="editor-tab" data-tab="sql">SQL</button>
-      <button class="editor-sql-refresh" id="sql-refresh-btn" style="display:none">Refresh</button>
+      <span class="editor-tab active" data-tab="html">HTML</span>
+      <button class="editor-collapse-btn" id="editor-collapse-btn" title="Hide editor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+             stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
     </div>
     <div class="editor-container" id="editor-mount"></div>
   `;
 
-  // Tab switching
-  container.querySelectorAll('.editor-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      switchTab(tab.dataset.tab);
-    });
-  });
-
-  // Manual SQL refresh button
-  container.querySelector('#sql-refresh-btn').addEventListener('click', () => {
-    if (!currentPage || !editorView) return;
-    const queries = parseSQLContent(editorView.state.doc.toString());
-    if (onSQLChange) onSQLChange(currentPage.id, queries);
+  container.querySelector('#editor-collapse-btn').addEventListener('click', () => {
+    if (callbacks.onCollapse) callbacks.onCollapse();
   });
 }
 
 /**
- * Load a page's code into the editor.
+ * Load a page's HTML into the editor.
  *
  * @param {object} page - { id, html, queries }
  */
 export function setEditorPage(page) {
   currentPage = page;
-  currentTab = 'html';
-  updateTabUI();
   createEditor();
 }
 
-/**
- * Switch between HTML and SQL tabs.
- */
-function switchTab(tab) {
-  currentTab = tab;
-  updateTabUI();
-  createEditor();
-}
-
-function updateTabUI() {
-  container.querySelectorAll('.editor-tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.tab === currentTab);
-  });
-  const refreshBtn = container.querySelector('#sql-refresh-btn');
-  if (refreshBtn) refreshBtn.style.display = currentTab === 'sql' ? '' : 'none';
-}
-
-/**
- * Create or recreate the CodeMirror editor with the right content and language.
- */
 function createEditor() {
-  const mount = container.querySelector('#editor-mount');
+  const mount = container?.querySelector('#editor-mount');
   if (!mount) return;
 
-  // Destroy existing editor
   if (editorView) {
     editorView.destroy();
     editorView = null;
@@ -107,82 +83,29 @@ function createEditor() {
     return;
   }
 
-  let content, language;
-
-  if (currentTab === 'html') {
-    content = currentPage.html || '';
-    language = html();
-  } else {
-    // Show all queries as named SQL blocks with a header
-    const entries = Object.entries(currentPage.queries || {});
-    const header = `-- ${entries.length} quer${entries.length === 1 ? 'y' : 'ies'} on this page  •  add or rename with: -- Query: name`;
-    const blocks = entries
-      .map(([name, sqlText]) => `-- Query: ${name}\n${sqlText.trimEnd()};`)
-      .join('\n\n');
-    content = header + '\n\n' + blocks;
-    language = sql();
-  }
-
-  // Detect dark mode
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
   const extensions = [
     basicSetup,
-    language,
+    html(),
     EditorView.lineWrapping,
     EditorView.updateListener.of(update => {
-      if (update.docChanged) {
-        handleChange(update.state.doc.toString());
-      }
+      if (update.docChanged) handleChange(update.state.doc.toString());
     }),
   ];
-
-  if (prefersDark) {
-    extensions.push(oneDark);
-  }
+  if (prefersDark) extensions.push(oneDark);
 
   editorView = new EditorView({
-    state: EditorState.create({
-      doc: content,
-      extensions,
-    }),
+    state: EditorState.create({ doc: currentPage.html || '', extensions }),
     parent: mount,
   });
 }
 
-/**
- * Handle editor changes. HTML auto-refreshes with debounce; SQL waits for the Refresh button.
- */
 function handleChange(newContent) {
-  if (currentTab !== 'html') return;
   clearTimeout(changeTimeout);
   changeTimeout = setTimeout(() => {
-    if (!currentPage) return;
-    if (onHTMLChange) onHTMLChange(currentPage.id, newContent);
+    if (!currentPage || !onHTMLChange) return;
+    onHTMLChange(currentPage.id, newContent);
   }, 500);
-}
-
-/**
- * Parse the SQL editor content back into a {name: sql} object.
- * Expects the format: -- Query: name\nSELECT ...;
- */
-function parseSQLContent(content) {
-  const queries = {};
-  const blocks = content.split(/^-- Query: /m).filter(Boolean);
-
-  for (const block of blocks) {
-    const newlineIndex = block.indexOf('\n');
-    if (newlineIndex === -1) continue;
-
-    const name = block.substring(0, newlineIndex).trim();
-    const sqlText = block.substring(newlineIndex + 1).trim().replace(/;$/, '');
-
-    if (name && sqlText) {
-      queries[name] = sqlText;
-    }
-  }
-
-  return queries;
 }
 
 /**
@@ -192,26 +115,95 @@ export function getEditorContent() {
   return editorView ? editorView.state.doc.toString() : '';
 }
 
+// ─── SQL Drawer ───────────────────────────────────────────────
+
 /**
- * Switch to the SQL tab and scroll to a specific named query.
+ * Mount the SQL drawer inside the preview panel element.
+ * The drawer slides up from the bottom when a visualization is clicked.
  *
- * @param {string} queryName - The query name to jump to
+ * @param {HTMLElement} previewPanelEl - The preview panel container
+ * @param {object} callbacks - { onApply(queryName, sqlText) }
  */
-export function focusQuery(queryName) {
-  if (currentTab !== 'sql') {
-    switchTab('sql');
+export function mountSQLDrawer(previewPanelEl, callbacks) {
+  onSQLApply = callbacks.onApply;
+
+  const drawer = document.createElement('div');
+  drawer.className = 'sql-drawer';
+  drawer.id = 'sql-drawer';
+  drawer.innerHTML = `
+    <div class="sql-drawer-header">
+      <div class="sql-drawer-title">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             width="14" height="14" style="flex-shrink:0">
+          <ellipse cx="12" cy="6" rx="8" ry="3"/>
+          <path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/>
+          <path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>
+        </svg>
+        <span id="sql-drawer-query-name">query</span>
+      </div>
+      <div class="sql-drawer-actions">
+        <button class="btn btn-primary sql-drawer-run" id="sql-drawer-run">Run</button>
+        <button class="sql-drawer-close" id="sql-drawer-close" title="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
+               stroke-linecap="round" width="14" height="14">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="sql-drawer-editor" id="sql-drawer-editor"></div>
+  `;
+
+  previewPanelEl.appendChild(drawer);
+  drawerEl = drawer;
+
+  drawer.querySelector('#sql-drawer-close').addEventListener('click', closeSQLDrawer);
+  drawer.querySelector('#sql-drawer-run').addEventListener('click', () => {
+    if (!drawerEditorView || !drawerQueryName || !onSQLApply) return;
+    onSQLApply(drawerQueryName, drawerEditorView.state.doc.toString().trim());
+  });
+}
+
+/**
+ * Open the SQL drawer for a specific query.
+ *
+ * @param {string} queryName - The query identifier
+ * @param {string} sqlText - The current SQL for this query
+ */
+export function openSQLDrawer(queryName, sqlText) {
+  if (!drawerEl) return;
+
+  drawerQueryName = queryName;
+  drawerEl.querySelector('#sql-drawer-query-name').textContent = queryName;
+  drawerEl.classList.add('open');
+
+  const mount = drawerEl.querySelector('#sql-drawer-editor');
+  if (drawerEditorView) {
+    drawerEditorView.destroy();
+    drawerEditorView = null;
   }
 
-  if (!editorView) return;
+  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const extensions = [basicSetup, sql(), EditorView.lineWrapping];
+  if (prefersDark) extensions.push(oneDark);
 
-  const content = editorView.state.doc.toString();
-  const marker = `-- Query: ${queryName}`;
-  const pos = content.indexOf(marker);
-  if (pos === -1) return;
-
-  editorView.dispatch({
-    selection: { anchor: pos, head: pos + marker.length },
-    effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 20 }),
+  drawerEditorView = new EditorView({
+    state: EditorState.create({ doc: sqlText || '', extensions }),
+    parent: mount,
   });
-  editorView.focus();
+  drawerEditorView.focus();
+}
+
+/**
+ * Close the SQL drawer.
+ */
+export function closeSQLDrawer() {
+  if (!drawerEl) return;
+  drawerEl.classList.remove('open');
+  if (drawerEditorView) {
+    drawerEditorView.destroy();
+    drawerEditorView = null;
+  }
+  drawerQueryName = null;
 }

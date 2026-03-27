@@ -322,9 +322,10 @@ body {
 
 .editor-tabs {
   display: flex;
+  align-items: center;
   background: var(--bg-surface);
   border-bottom: 1px solid var(--border-light);
-  padding: 0 12px;
+  padding: 0 8px 0 12px;
   gap: 0;
 }
 
@@ -337,31 +338,54 @@ body {
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--text-tertiary);
-  cursor: pointer;
-  transition: color 0.12s, border-color 0.12s;
+  cursor: default;
 }
 
-.editor-tab:hover { color: var(--text-secondary); }
 .editor-tab.active {
   color: var(--text-primary);
   border-bottom-color: var(--color-brand);
 }
 
-.editor-sql-refresh {
+/* Collapse button — lives at the right of the editor tab bar */
+.editor-collapse-btn {
   margin-left: auto;
-  align-self: center;
-  font-family: var(--font-body);
-  font-size: 12px;
-  font-weight: 500;
-  padding: 5px 12px;
-  background: var(--color-brand);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
   cursor: pointer;
-  transition: opacity 0.12s;
+  transition: background 0.12s, color 0.12s;
 }
-.editor-sql-refresh:hover { opacity: 0.85; }
+.editor-collapse-btn:hover {
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+}
+
+/* Toggle button — lives in the preview toolbar */
+.editor-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.editor-toggle-btn:hover {
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+}
 
 .editor-container {
   flex: 1;
@@ -374,6 +398,539 @@ body {
 }
 
 .editor-container .cm-editor .cm-scroller {
+  font-family: var(--font-mono);
+}
+
+/* ─── Preview toolbar Quick Edit button ─── */
+.quick-edit-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.quick-edit-toggle-btn:hover {
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+}
+.quick-edit-toggle-btn.active {
+  background: var(--color-brand-light);
+  border-color: var(--color-brand);
+  color: var(--color-brand-text);
+}
+
+/* ─── Quick Edit Panel ─── */
+.quick-edit-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 216px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-light);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+}
+
+.quick-edit-panel.open {
+  transform: translateX(0);
+}
+
+.qe-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.qe-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.01em;
+}
+
+.qe-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.qe-close:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
+
+.qe-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+.qe-section {
+  padding: 10px 12px 4px;
+}
+
+.qe-section + .qe-section {
+  border-top: 1px solid var(--border-light);
+}
+
+.qe-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+
+.qe-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.qe-row-slider {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+
+.qe-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.qe-color {
+  width: 32px;
+  height: 24px;
+  padding: 1px 2px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: none;
+}
+
+/* Font size chips */
+.qe-chips {
+  display: flex;
+  gap: 3px;
+}
+
+.qe-chip {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.qe-chip:hover { background: var(--border-light); }
+.qe-chip.active {
+  background: var(--bg-accent);
+  color: var(--text-on-accent);
+  border-color: var(--bg-accent);
+}
+
+/* Slider */
+.qe-slider-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.qe-slider-val {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.qe-slider {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--color-brand);
+  cursor: pointer;
+}
+
+/* Dark mode toggle row */
+.qe-dark-row { margin-top: 2px; }
+
+.qe-toggle {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+.qe-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.qe-toggle-track {
+  display: block;
+  width: 32px;
+  height: 18px;
+  background: var(--border-medium);
+  border-radius: 9px;
+  transition: background 0.15s;
+  position: relative;
+}
+.qe-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.qe-toggle input:checked + .qe-toggle-track { background: var(--color-brand); }
+.qe-toggle input:checked + .qe-toggle-track::after { transform: translateX(14px); }
+
+.qe-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.qe-reset-btn {
+  width: 100%;
+  font-size: 12px;
+  padding: 7px 0;
+  justify-content: center;
+}
+
+/* ─── Visual Editor Panel ─── */
+.visual-editor-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 216px;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-light);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  transform: translateX(100%);
+  transition: transform 0.2s ease;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+}
+
+.visual-editor-panel.open {
+  transform: translateX(0);
+}
+
+/* Idle state */
+.ve-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 24px;
+  color: var(--text-tertiary);
+}
+
+.ve-idle-text {
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Header */
+.ve-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.ve-header-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-tertiary);
+}
+
+.ve-query-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ve-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ve-close:hover { background: var(--bg-surface-alt); color: var(--text-primary); }
+
+/* Body */
+.ve-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+.ve-section {
+  padding: 10px 12px 4px;
+}
+
+.ve-section + .ve-section {
+  border-top: 1px solid var(--border-light);
+}
+
+.ve-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  margin-bottom: 8px;
+}
+
+.ve-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 7px;
+}
+
+.ve-row-slider {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+}
+
+.ve-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ve-color {
+  width: 32px;
+  height: 24px;
+  padding: 1px 2px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: none;
+}
+
+.ve-chips {
+  display: flex;
+  gap: 3px;
+}
+
+.ve-chip {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.ve-chip:hover { background: var(--border-light); }
+.ve-chip.active {
+  background: var(--bg-accent);
+  color: var(--text-on-accent);
+  border-color: var(--bg-accent);
+}
+
+.ve-slider-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ve-slider-val {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.ve-slider {
+  width: 100%;
+  height: 4px;
+  accent-color: var(--color-brand);
+  cursor: pointer;
+}
+
+.ve-toggle {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+}
+.ve-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.ve-toggle-track {
+  display: block;
+  width: 32px;
+  height: 18px;
+  background: var(--border-medium);
+  border-radius: 9px;
+  transition: background 0.15s;
+  position: relative;
+}
+.ve-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 0.15s;
+}
+.ve-toggle input:checked + .ve-toggle-track { background: var(--color-brand); }
+.ve-toggle input:checked + .ve-toggle-track::after { transform: translateX(14px); }
+
+/* Footer */
+.ve-footer {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.ve-reset-btn {
+  width: 100%;
+  font-size: 12px;
+  padding: 7px 0;
+  justify-content: center;
+}
+
+/* ─── SQL Drawer ─── */
+.sql-drawer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 260px;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border-medium);
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 0.2s ease;
+  z-index: 20;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
+}
+
+.sql-drawer.open {
+  transform: translateY(0);
+}
+
+.sql-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  height: 40px;
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.sql-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.sql-drawer-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sql-drawer-run {
+  font-size: 12px;
+  padding: 5px 14px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.sql-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.sql-drawer-close:hover {
+  background: var(--bg-surface-alt);
+  color: var(--text-primary);
+}
+
+.sql-drawer-editor {
+  flex: 1;
+  overflow: auto;
+}
+
+.sql-drawer-editor .cm-editor {
+  height: 100%;
+  font-size: 13px;
+}
+
+.sql-drawer-editor .cm-editor .cm-scroller {
   font-family: var(--font-mono);
 }
 

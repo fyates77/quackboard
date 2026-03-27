@@ -12,7 +12,6 @@ import {
   getState,
   subscribe,
   navigateToPage,
-  navigateToPageIndex,
   updatePageHTML,
   updatePageQueries,
   loadFromStorage,
@@ -21,9 +20,32 @@ import {
 } from './engine/project.js';
 import { mountDataPanel } from './components/data-panel.js';
 import { mountPromptBar, setGenerating, clearPrompt } from './components/prompt-bar.js';
-import { mountEditorPanel, setEditorPage, focusQuery } from './components/editor-panel.js';
-import { mountPreviewPanel, renderProject, refreshCurrentPage } from './components/preview-panel.js';
+import {
+  mountEditorPanel,
+  setEditorPage,
+  mountSQLDrawer,
+  openSQLDrawer,
+  closeSQLDrawer,
+} from './components/editor-panel.js';
+import {
+  mountPreviewPanel,
+  renderProject,
+  refreshCurrentPage,
+  setEditorToggleState,
+} from './components/preview-panel.js';
+import {
+  mountVisualEditorPanel,
+  openVisualEditor,
+  closeVisualEditor,
+} from './components/visual-editor-panel.js';
+import {
+  setVisualOverride,
+  applyVisualOverridesToIframe,
+  clearVisualOverrides,
+} from './engine/sandbox.js';
 import { mountSettingsModal, showSettings, loadSettings, isConfigured } from './components/settings-modal.js';
+
+let editorVisible = true;
 
 /**
  * Boot the application.
@@ -86,14 +108,18 @@ export async function initApp() {
     </div>
   `;
 
+  const previewPanelEl = document.getElementById('preview-panel');
+
   // Mount all components
   mountDataPanel(document.getElementById('sidebar'), handleTablesChanged);
   mountPromptBar(document.getElementById('prompt-bar'), handlePromptSubmit);
   mountEditorPanel(document.getElementById('editor-panel'), {
     onHTMLChange: handleHTMLChange,
-    onSQLChange: handleSQLChange,
+    onCollapse: toggleEditor,
   });
-  mountPreviewPanel(document.getElementById('preview-panel'), handlePageNavigate, focusQuery);
+  mountPreviewPanel(previewPanelEl, handlePageNavigate, handleViewQuery, toggleEditor, null, handleSelectVisual);
+  mountSQLDrawer(previewPanelEl, { onApply: handleSQLDrawerApply });
+  mountVisualEditorPanel(previewPanelEl, { onApply: handleVisualOverride });
   mountSettingsModal();
 
   // Wire up header buttons
@@ -123,10 +149,29 @@ export async function initApp() {
 }
 
 /**
+ * Toggle the HTML editor panel open/closed.
+ */
+function toggleEditor() {
+  editorVisible = !editorVisible;
+  const workspace = document.getElementById('workspace');
+  const editorPanel = document.getElementById('editor-panel');
+
+  if (editorVisible) {
+    workspace.classList.remove('preview-only');
+    editorPanel.style.display = '';
+  } else {
+    workspace.classList.add('preview-only');
+    editorPanel.style.display = 'none';
+    closeSQLDrawer();
+  }
+
+  setEditorToggleState(editorVisible);
+}
+
+/**
  * Handle prompt submission — generate or refine a dashboard.
  */
 async function handlePromptSubmit(prompt) {
-  // Check settings
   if (!isConfigured()) {
     showSettings();
     showToast('Please configure your API key first.', 'error');
@@ -146,6 +191,7 @@ async function handlePromptSubmit(prompt) {
       state.hasProject ? state.project : null
     );
 
+    clearVisualOverrides();
     setProject(project);
     clearPrompt();
     showToast('Dashboard generated!');
@@ -169,7 +215,7 @@ function handleStateChange(state) {
 }
 
 /**
- * Handle code editor HTML changes — live update the preview.
+ * Handle HTML editor changes — live update the preview.
  */
 function handleHTMLChange(pageId, newHTML) {
   updatePageHTML(pageId, newHTML);
@@ -177,11 +223,45 @@ function handleHTMLChange(pageId, newHTML) {
 }
 
 /**
- * Handle code editor SQL changes.
+ * Handle "Edit SQL" click on a visualization — open the SQL drawer.
  */
-function handleSQLChange(pageId, newQueries) {
-  updatePageQueries(pageId, newQueries);
+function handleViewQuery(queryName) {
+  const state = getState();
+  if (!state.currentPage) return;
+  const sqlText = state.currentPage.queries?.[queryName] || '';
+  openSQLDrawer(queryName, sqlText);
+}
+
+/**
+ * Handle SQL drawer "Run" — update the query and refresh the preview.
+ */
+function handleSQLDrawerApply(queryName, sqlText) {
+  const state = getState();
+  if (!state.currentPage) return;
+  const newQueries = { ...state.currentPage.queries, [queryName]: sqlText };
+  updatePageQueries(state.currentPage.id, newQueries);
   refreshCurrentPage();
+}
+
+/**
+ * Handle visual selection from the iframe — open the visual editor panel.
+ * Called with `null` when the user deselects.
+ */
+function handleSelectVisual(info) {
+  if (info) {
+    openVisualEditor(info);
+  } else {
+    closeVisualEditor();
+  }
+}
+
+/**
+ * Handle visual override from the visual editor panel.
+ * Stores the override and pushes it live into the iframe.
+ */
+function handleVisualOverride(queryName, overrides) {
+  setVisualOverride(queryName, overrides);
+  applyVisualOverridesToIframe(queryName, overrides);
 }
 
 /**
@@ -195,7 +275,6 @@ function handlePageNavigate(pageId, params) {
  * Handle data tables changing.
  */
 function handleTablesChanged(tables) {
-  // Could update prompt placeholder, show table count, etc.
   console.log(`${tables.length} table(s) loaded.`);
 }
 
