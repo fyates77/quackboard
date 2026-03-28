@@ -47,21 +47,23 @@ export async function renderPage(page, params = {}) {
   currentPageId = page.id;
   currentParams = params;
 
-  // Pre-execute all the page's declared queries, substituting params
-  const queryResults = {};
-  for (const [name, sql] of Object.entries(page.queries)) {
+  // Pre-execute all the page's declared queries in parallel, substituting params
+  const entries = Object.entries(page.queries);
+  const settled = await Promise.all(entries.map(async ([name, sql]) => {
+    let resolvedSQL = sql;
+    for (const [key, value] of Object.entries(params)) {
+      resolvedSQL = resolvedSQL.replaceAll(`{{${key}}}`, escapeSQL(value));
+    }
+    // Any placeholder not supplied by params defaults to '' (= "no filter")
+    resolvedSQL = resolvedSQL.replace(/\{\{[^}]+\}\}/g, '');
     try {
-      // Replace {{param}} placeholders with actual values
-      let resolvedSQL = sql;
-      for (const [key, value] of Object.entries(params)) {
-        resolvedSQL = resolvedSQL.replaceAll(`{{${key}}}`, escapeSQL(value));
-      }
-      queryResults[name] = await runQuery(resolvedSQL);
+      return [name, await runQuery(resolvedSQL)];
     } catch (err) {
       console.error(`Query "${name}" failed:`, err);
-      queryResults[name] = { columns: [], rows: [], error: err.message };
+      return [name, { columns: [], rows: [], error: err.message }];
     }
-  }
+  }));
+  const queryResults = Object.fromEntries(settled);
 
   // Build the full HTML document for the iframe
   const fullHTML = buildIframeDocument(page.html, queryResults, params, Object.keys(page.queries));
@@ -695,6 +697,22 @@ export function applyVisualOverridesToIframe(queryName, overrides) {
  */
 export function clearVisualOverrides() {
   visualOverrides = {};
+}
+
+/**
+ * Get a snapshot of all current visual overrides (for persistence).
+ */
+export function getVisualOverrides() {
+  return { ...visualOverrides };
+}
+
+/**
+ * Restore visual overrides from a previously saved snapshot.
+ *
+ * @param {object} data
+ */
+export function loadVisualOverrides(data) {
+  visualOverrides = data && typeof data === 'object' ? { ...data } : {};
 }
 
 /**

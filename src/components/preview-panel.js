@@ -44,6 +44,7 @@ export function mountPreviewPanel(el, onNavigate, onViewQuery, onToggleEditor, o
         </div>
       </div>
     </div>
+    <div class="filter-bar" id="filter-bar"></div>
     <iframe class="preview-iframe" id="preview-iframe" sandbox="allow-scripts allow-modals"></iframe>
   `;
 
@@ -113,15 +114,16 @@ export async function renderProject(project, pageIndex = 0, params = {}) {
 
 /**
  * Re-render the current page (after code edits).
+ * @param {object} [extraParams] - Additional params to merge (e.g. active filter values)
  */
-export async function refreshCurrentPage() {
+export async function refreshCurrentPage(extraParams = {}) {
   if (!currentProject) return;
 
   const page = currentProject.pages[currentPageIndex];
   if (page) {
     setStatus('loading', 'Refreshing...');
     try {
-      await renderPage(page, page._params || {});
+      await renderPage(page, { ...(page._params || {}), ...extraParams });
       setStatus('ready', page.title || page.id);
     } catch (err) {
       setStatus('error', `Error: ${err.message}`);

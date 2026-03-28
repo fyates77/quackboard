@@ -5,12 +5,12 @@
  * and returns a structured dashboard project (pages with HTML + SQL).
  */
 
-import { getSchemaContext } from './duckdb.js';
+import { getSchemaContext, detectRelationships } from './duckdb.js';
 
 /**
  * Build the system prompt that teaches the AI how to generate dashboards.
  */
-function buildSystemPrompt(schemaContext) {
+function buildSystemPrompt(schemaContext, relationships = []) {
   const schemaBlock = schemaContext.map(table => {
     const cols = table.columns.map(c => `    ${c.name} (${c.type})`).join('\n');
     const samples = table.sampleRows.length > 0
@@ -19,10 +19,15 @@ function buildSystemPrompt(schemaContext) {
     return `  Table: "${table.tableName}" (${table.rowCount.toLocaleString()} rows)\n  Columns:\n${cols}${samples}`;
   }).join('\n\n');
 
+  const relationshipsBlock = relationships.length > 0
+    ? `\n## Possible joins (shared column names across tables)\n` +
+      relationships.map(r => `  "${r.table1}".${r.column} ↔ "${r.table2}".${r.column}`).join('\n')
+    : '';
+
   return `You are a dashboard generation engine. You produce interactive HTML dashboards backed by DuckDB SQL queries.
 
 ## Available data
-${schemaBlock || '  No tables loaded yet.'}
+${schemaBlock || '  No tables loaded yet.'}${relationshipsBlock}
 
 ## Output format
 Respond with ONLY a JSON object (no markdown, no backticks, no explanation). The JSON must match this schema:
@@ -32,8 +37,12 @@ Respond with ONLY a JSON object (no markdown, no backticks, no explanation). The
     {
       "id": "overview",
       "title": "Overview",
+      "filters": [
+        { "id": "region", "label": "Region", "type": "select", "optionsQuery": "SELECT DISTINCT region FROM sales ORDER BY 1", "default": "" },
+        { "id": "start_date", "label": "From", "type": "date", "default": "2024-01-01" }
+      ],
       "queries": {
-        "query_name": "SELECT ... FROM table_name"
+        "query_name": "SELECT ... FROM table_name WHERE ('{{region}}' = '' OR region = '{{region}}')"
       },
       "html": "<div>...full HTML for this page...</div>",
       "description": "Brief description of what this page shows"
@@ -100,12 +109,11 @@ Respond with ONLY a JSON object (no markdown, no backticks, no explanation). The
    - Cards: white background, 1px solid #e8e7e3 border, 12px border-radius, 20px padding.
    - Metric cards: large number (28px, bold), small label above (12px, gray).
 
-6. INTERACTIVITY: Add filters, click handlers, hover effects, and sorting where appropriate.
-   - Date filters, dropdowns, search boxes — use real HTML form elements styled to match.
-   - When a filter changes, call window.quackboard.query() with a new SQL query that includes the filter
-     condition in a WHERE clause — do NOT filter the existing rows array in JavaScript.
+6. INTERACTIVITY: Add click handlers, hover effects, and in-chart sorting where appropriate.
    - Tables should be sortable; use ORDER BY in SQL or re-query with the new sort column.
    - Charts should have tooltips.
+   - Do NOT put filter form controls (dropdowns, date pickers, search boxes) inside the HTML —
+     declare them as "filters" instead (see Rule 9). The app renders the filter UI automatically.
 
 7. MULTI-PAGE: If the user asks for drill-downs or multiple views, create multiple pages.
    - The first page is always the landing/overview page.
@@ -116,6 +124,21 @@ Respond with ONLY a JSON object (no markdown, no backticks, no explanation). The
    - The base aggregated data comes from SQL queries.
    - JS may apply scalar multipliers or offsets to pre-aggregated totals (e.g. multiply a revenue total
      by a growth rate slider) — this is the only acceptable JS arithmetic on data values.
+
+9. FILTERS: Declare page-level filters as a "filters" array on each page that needs user-controllable filtering.
+   Filter types:
+     - "select"  — dropdown populated from a SQL query. Requires "optionsQuery": "SELECT DISTINCT col FROM tbl ORDER BY 1".
+     - "date"    — date picker. Use "default": "YYYY-MM-DD" or "".
+     - "number"  — numeric input. Use "default": "0" or any number string.
+     - "text"    — free-text search input.
+   Each filter has { "id", "label", "type", "default" } plus "optionsQuery" for select type.
+   Use {{filter_id}} placeholders in your SQL queries. Handle the "All" / empty case:
+     - Select / text: WHERE ('{{region}}' = '' OR region = '{{region}}')
+     - Date:          WHERE ('{{start_date}}' = '' OR order_date >= '{{start_date}}'::DATE)
+     - Number:        WHERE (TRY_CAST('{{week}}' AS INTEGER) IS NULL OR week = TRY_CAST('{{week}}' AS INTEGER))
+     NEVER use CAST for number filters — always TRY_CAST, which returns NULL on empty string instead of erroring.
+   Only declare filters when the user's prompt implies filtering or slicing (e.g. "by region", "date range").
+   Do not add filters just to have them — only when they add genuine analytical value.
 
 Remember: output ONLY the JSON. No markdown fences, no explanation text.`;
 }
@@ -129,8 +152,10 @@ Remember: output ONLY the JSON. No markdown fences, no explanation text.`;
  * @returns {object} - The parsed dashboard project JSON
  */
 export async function generateDashboard(userPrompt, options, existingProject = null) {
+  // Run sequentially — both use the same DuckDB connection and must not overlap
   const schemaContext = await getSchemaContext();
-  const systemPrompt = buildSystemPrompt(schemaContext);
+  const relationships = await detectRelationships();
+  const systemPrompt = buildSystemPrompt(schemaContext, relationships);
 
   // Build the user message, including existing project context for refinement
   let userMessage = userPrompt;
@@ -270,6 +295,24 @@ export function validateProject(project) {
     for (const [name, sql] of Object.entries(page.queries)) {
       if (typeof sql !== 'string' || !sql.trim()) {
         throw new Error(`Query "${name}" on page "${page.id}" must be a non-empty SQL string.`);
+      }
+    }
+
+    // Validate optional filters array
+    if (page.filters !== undefined && !Array.isArray(page.filters)) {
+      throw new Error(`Page "${page.id}" has invalid filters (must be an array).`);
+    }
+    page.filters = page.filters || [];
+    const validFilterTypes = ['text', 'select', 'date', 'number'];
+    for (const f of page.filters) {
+      if (!f.id || typeof f.id !== 'string') {
+        throw new Error(`A filter on page "${page.id}" is missing a string id.`);
+      }
+      if (!validFilterTypes.includes(f.type)) {
+        throw new Error(`Filter "${f.id}" on page "${page.id}" has invalid type "${f.type}".`);
+      }
+      if (f.type === 'select' && (typeof f.optionsQuery !== 'string' || !f.optionsQuery.trim())) {
+        throw new Error(`Select filter "${f.id}" on page "${page.id}" requires a non-empty optionsQuery.`);
       }
     }
 

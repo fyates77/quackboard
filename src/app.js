@@ -39,13 +39,23 @@ import {
   closeVisualEditor,
 } from './components/visual-editor-panel.js';
 import {
+  mountFilterBar,
+  renderFilters,
+} from './components/filter-bar.js';
+import {
   setVisualOverride,
   applyVisualOverridesToIframe,
   clearVisualOverrides,
+  getVisualOverrides,
+  loadVisualOverrides,
 } from './engine/sandbox.js';
 import { mountSettingsModal, showSettings, loadSettings, isConfigured } from './components/settings-modal.js';
 
+const OVERRIDES_KEY = 'quackboard_overrides';
+
 let editorVisible = true;
+let lastRenderedPageId = null;
+let currentFilterValues = {};
 
 /**
  * Boot the application.
@@ -120,6 +130,7 @@ export async function initApp() {
   mountPreviewPanel(previewPanelEl, handlePageNavigate, handleViewQuery, toggleEditor, null, handleSelectVisual);
   mountSQLDrawer(previewPanelEl, { onApply: handleSQLDrawerApply });
   mountVisualEditorPanel(previewPanelEl, { onApply: handleVisualOverride });
+  mountFilterBar(document.getElementById('filter-bar'));
   mountSettingsModal();
 
   // Wire up header buttons
@@ -128,6 +139,8 @@ export async function initApp() {
   document.getElementById('btn-clear').addEventListener('click', () => {
     if (confirm('Clear the current dashboard? This cannot be undone.')) {
       clearProject();
+      clearVisualOverrides();
+      localStorage.removeItem(OVERRIDES_KEY);
       location.reload();
     }
   });
@@ -144,8 +157,12 @@ export async function initApp() {
     showToast('Failed to start DuckDB. Try refreshing the page.', 'error');
   }
 
-  // Restore any saved project
+  // Restore any saved project and visual overrides
   loadFromStorage();
+  try {
+    const saved = localStorage.getItem(OVERRIDES_KEY);
+    if (saved) loadVisualOverrides(JSON.parse(saved));
+  } catch (_) { /* corrupt data — ignore */ }
 }
 
 /**
@@ -206,11 +223,31 @@ async function handlePromptSubmit(prompt) {
 
 /**
  * Handle project state changes — update editor and preview.
+ * Async so we can await the page render before loading filter options,
+ * preventing concurrent DuckDB queries on the same connection.
  */
-function handleStateChange(state) {
-  if (state.hasProject && state.currentPage) {
-    setEditorPage(state.currentPage);
-    renderProject(state.project, state.currentPageIndex, state.currentPage._params || {});
+async function handleStateChange(state) {
+  if (!state.hasProject || !state.currentPage) return;
+
+  setEditorPage(state.currentPage);
+
+  const pageChanged = state.currentPage.id !== lastRenderedPageId;
+  if (pageChanged) {
+    lastRenderedPageId = state.currentPage.id;
+    // Pre-seed from declared defaults so the first render uses correct params
+    currentFilterValues = {};
+    for (const f of (state.currentPage.filters || [])) {
+      currentFilterValues[f.id] = f.default ?? '';
+    }
+  }
+
+  const params = { ...(state.currentPage._params || {}), ...currentFilterValues };
+  // Await page render first — filter optionsQueries must not run concurrently
+  await renderProject(state.project, state.currentPageIndex, params);
+
+  // Load filter option dropdowns only after page queries have finished
+  if (pageChanged) {
+    renderFilters(state.currentPage.filters || [], handleFilterChange);
   }
 }
 
@@ -219,7 +256,7 @@ function handleStateChange(state) {
  */
 function handleHTMLChange(pageId, newHTML) {
   updatePageHTML(pageId, newHTML);
-  refreshCurrentPage();
+  refreshCurrentPage(currentFilterValues);
 }
 
 /**
@@ -240,7 +277,7 @@ function handleSQLDrawerApply(queryName, sqlText) {
   if (!state.currentPage) return;
   const newQueries = { ...state.currentPage.queries, [queryName]: sqlText };
   updatePageQueries(state.currentPage.id, newQueries);
-  refreshCurrentPage();
+  refreshCurrentPage(currentFilterValues);
 }
 
 /**
@@ -257,11 +294,25 @@ function handleSelectVisual(info) {
 
 /**
  * Handle visual override from the visual editor panel.
- * Stores the override and pushes it live into the iframe.
+ * Stores the override, pushes it live, and persists to localStorage.
  */
 function handleVisualOverride(queryName, overrides) {
   setVisualOverride(queryName, overrides);
   applyVisualOverridesToIframe(queryName, overrides);
+  try {
+    localStorage.setItem(OVERRIDES_KEY, JSON.stringify(getVisualOverrides()));
+  } catch (_) { /* storage full — ignore */ }
+}
+
+/**
+ * Handle filter value changes — re-render the current page with new params.
+ */
+function handleFilterChange(filterValues) {
+  currentFilterValues = filterValues;
+  const state = getState();
+  if (!state.currentPage) return;
+  const params = { ...(state.currentPage._params || {}), ...filterValues };
+  renderProject(state.project, state.currentPageIndex, params);
 }
 
 /**

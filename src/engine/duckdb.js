@@ -189,7 +189,7 @@ export async function getSchemaContext() {
     const sampleRows = sampleResult.toArray().map(row => {
       const obj = {};
       for (const col of columns) {
-        obj[col.name] = row[col.name];
+        obj[col.name] = normalizeValue(row[col.name]);
       }
       return obj;
     });
@@ -198,6 +198,43 @@ export async function getSchemaContext() {
   }
 
   return tables;
+}
+
+/**
+ * Detect potential join relationships by finding column names that appear
+ * in two or more tables. Returns pairs suitable for the AI prompt.
+ *
+ * @returns {{ column: string, table1: string, table2: string }[]}
+ */
+export async function detectRelationships() {
+  if (!conn) return [];
+
+  const result = await conn.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'main'
+     ORDER BY table_name, ordinal_position`
+  );
+
+  const columnToTables = {};
+  for (const row of result.toArray()) {
+    const col = row.column_name;
+    const tbl = row.table_name;
+    if (!columnToTables[col]) columnToTables[col] = [];
+    columnToTables[col].push(tbl);
+  }
+
+  const relationships = [];
+  for (const [col, tables] of Object.entries(columnToTables)) {
+    if (tables.length >= 2) {
+      for (let i = 0; i < tables.length; i++) {
+        for (let j = i + 1; j < tables.length; j++) {
+          relationships.push({ column: col, table1: tables[i], table2: tables[j] });
+        }
+      }
+    }
+  }
+  return relationships;
 }
 
 /**
