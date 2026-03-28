@@ -12,8 +12,8 @@ import {
   getState,
   subscribe,
   navigateToPage,
-  updatePageHTML,
   updatePageQueries,
+  updateVisual,
   loadFromStorage,
   exportProject,
   clearProject,
@@ -124,8 +124,8 @@ export async function initApp() {
   mountDataPanel(document.getElementById('sidebar'), handleTablesChanged);
   mountPromptBar(document.getElementById('prompt-bar'), handlePromptSubmit);
   mountEditorPanel(document.getElementById('editor-panel'), {
-    onHTMLChange: handleHTMLChange,
-    onCollapse: toggleEditor,
+    onCollapse:  toggleEditor,
+    onViewQuery: handleViewQuery,
   });
   mountPreviewPanel(previewPanelEl, handlePageNavigate, handleViewQuery, toggleEditor, null, handleSelectVisual);
   mountSQLDrawer(previewPanelEl, { onApply: handleSQLDrawerApply });
@@ -254,11 +254,6 @@ async function handleStateChange(state) {
 /**
  * Handle HTML editor changes — live update the preview.
  */
-function handleHTMLChange(pageId, newHTML) {
-  updatePageHTML(pageId, newHTML);
-  refreshCurrentPage(currentFilterValues);
-}
-
 /**
  * Handle "Edit SQL" click on a visualization — open the SQL drawer.
  */
@@ -294,14 +289,27 @@ function handleSelectVisual(info) {
 
 /**
  * Handle visual override from the visual editor panel.
- * Stores the override, pushes it live, and persists to localStorage.
+ * Applies live to the iframe, persists override to localStorage,
+ * and silently updates the visual spec for durable changes (color, type, legend).
  */
-function handleVisualOverride(queryName, overrides) {
-  setVisualOverride(queryName, overrides);
-  applyVisualOverridesToIframe(queryName, overrides);
+function handleVisualOverride(visualId, overrides) {
+  setVisualOverride(visualId, overrides);
+  applyVisualOverridesToIframe(visualId, overrides);
   try {
     localStorage.setItem(OVERRIDES_KEY, JSON.stringify(getVisualOverrides()));
   } catch (_) { /* storage full — ignore */ }
+
+  // Persist relevant fields back into the visual spec so they survive re-renders
+  const state = getState();
+  if (!state.currentPage) return;
+  const visual = state.currentPage.visuals?.find(v => v.id === visualId);
+  if (!visual) return;
+  const specChanges = {};
+  if (overrides.chartColor)               specChanges.color      = overrides.chartColor;
+  if (overrides.chartType)                specChanges.type       = overrides.chartType;
+  if (overrides.showLegend !== undefined) specChanges.showLegend = overrides.showLegend;
+  if (overrides.crossFilter !== undefined) specChanges.crossFilter = overrides.crossFilter;
+  if (Object.keys(specChanges).length) updateVisual(state.currentPage.id, visualId, specChanges);
 }
 
 /**

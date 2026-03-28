@@ -7,7 +7,7 @@
  */
 
 let panelEl = null;
-let currentVisual = null; // { queryName, type, chartType, currentColor }
+let currentVisual = null; // { visualId, queryName, type, chartType, currentColor }
 let onApplyCallback = null;
 
 // Pending overrides being built before Apply
@@ -101,6 +101,17 @@ function renderForVisual(info) {
 
     <div class="ve-body">
 
+      <div class="ve-section">
+        <div class="ve-section-title">Interactions</div>
+        <div class="ve-row">
+          <label class="ve-label">Use as filter</label>
+          <label class="ve-toggle">
+            <input type="checkbox" id="ve-cross-filter" ${info.crossFilter ? 'checked' : ''}>
+            <span class="ve-toggle-track"></span>
+          </label>
+        </div>
+      </div>
+
       ${info.type === 'chart' ? renderChartSection(info) : ''}
       ${info.type === 'table' ? renderTableSection() : ''}
 
@@ -193,6 +204,12 @@ function renderTableSection() {
 function wireControls(info) {
   panelEl.querySelector('#ve-close').addEventListener('click', closeVisualEditor);
 
+  // Interaction controls
+  panelEl.querySelector('#ve-cross-filter').addEventListener('change', e => {
+    pendingOverrides.crossFilter = e.target.checked;
+    emit();
+  });
+
   // Chart controls
   if (info.type === 'chart') {
     panelEl.querySelector('#ve-chart-color').addEventListener('input', e => {
@@ -259,5 +276,5 @@ function wireControls(info) {
 
 function emit() {
   if (!currentVisual || !onApplyCallback) return;
-  onApplyCallback(currentVisual.queryName, { ...pendingOverrides });
+  onApplyCallback(currentVisual.visualId, { ...pendingOverrides });
 }

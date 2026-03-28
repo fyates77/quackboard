@@ -81,16 +81,17 @@ export function navigateToPageIndex(index) {
 }
 
 /**
- * Update a specific page's HTML (from the code editor).
+ * Update a single visual's spec fields (e.g. color, type).
+ * Does NOT trigger a re-render — caller handles that if needed.
  */
-export function updatePageHTML(pageId, newHTML) {
+export function updateVisual(pageId, visualId, changes) {
   if (!currentProject) return;
-
   const page = currentProject.pages.find(p => p.id === pageId);
-  if (page) {
-    page.html = newHTML;
+  if (!page) return;
+  const visual = page.visuals?.find(v => v.id === visualId);
+  if (visual) {
+    Object.assign(visual, changes);
     saveToStorage();
-    notify();
   }
 }
 

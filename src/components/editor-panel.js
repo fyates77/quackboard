@@ -1,44 +1,36 @@
 /**
  * Editor panel component.
  *
- * HTML editor with collapse/expand toggle.
- * SQL editing is handled per-visualization via the SQL drawer (see mountSQLDrawer).
+ * Shows the list of SQL queries for the current page.
+ * Clicking a query opens the SQL drawer to edit it.
+ * SQL editing is per-visualization via the SQL drawer.
  */
 
 import { EditorView, basicSetup } from 'codemirror';
-import { html } from '@codemirror/lang-html';
 import { sql } from '@codemirror/lang-sql';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorState } from '@codemirror/state';
 
-// ─── HTML editor state ────────────────────────────────────────
+let container     = null;
+let currentPage   = null;
+let callbacks     = {};
 
-let container = null;
-let editorView = null;
-let currentPage = null;
-let onHTMLChange = null;
-let changeTimeout = null;
-
-// ─── SQL drawer state ─────────────────────────────────────────
-
-let drawerEl = null;
+// ── SQL Drawer state ──────────────────────────────────────────
+let drawerEl         = null;
 let drawerEditorView = null;
-let drawerQueryName = null;
-let onSQLApply = null;
+let drawerQueryName  = null;
+let onSQLApply       = null;
 
 /**
- * Create and mount the editor panel (HTML only).
- *
- * @param {HTMLElement} el - Where to mount
- * @param {object} callbacks - { onHTMLChange, onCollapse }
+ * Mount the editor panel (query list).
  */
-export function mountEditorPanel(el, callbacks) {
+export function mountEditorPanel(el, cbs) {
   container = el;
-  onHTMLChange = callbacks.onHTMLChange;
+  callbacks = cbs || {};
 
   container.innerHTML = `
     <div class="editor-tabs">
-      <span class="editor-tab active" data-tab="html">HTML</span>
+      <span class="editor-tab active">SQL Queries</span>
       <button class="editor-collapse-btn" id="editor-collapse-btn" title="Hide editor">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
              stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
@@ -46,7 +38,12 @@ export function mountEditorPanel(el, callbacks) {
         </svg>
       </button>
     </div>
-    <div class="editor-container" id="editor-mount"></div>
+    <div class="query-list" id="query-list">
+      <div class="empty-state">
+        <div class="empty-state-title">No dashboard yet</div>
+        <div class="empty-state-text">Generate a dashboard to see its queries here.</div>
+      </div>
+    </div>
   `;
 
   container.querySelector('#editor-collapse-btn').addEventListener('click', () => {
@@ -55,77 +52,49 @@ export function mountEditorPanel(el, callbacks) {
 }
 
 /**
- * Load a page's HTML into the editor.
- *
- * @param {object} page - { id, html, queries }
+ * Display the queries for a page in the query list panel.
  */
 export function setEditorPage(page) {
   currentPage = page;
-  createEditor();
+  renderQueryList(page);
 }
 
-function createEditor() {
-  const mount = container?.querySelector('#editor-mount');
-  if (!mount) return;
+function renderQueryList(page) {
+  const listEl = container?.querySelector('#query-list');
+  if (!listEl) return;
 
-  if (editorView) {
-    editorView.destroy();
-    editorView = null;
-  }
-
-  if (!currentPage) {
-    mount.innerHTML = `
+  if (!page?.queries || Object.keys(page.queries).length === 0) {
+    listEl.innerHTML = `
       <div class="empty-state">
-        <div class="empty-state-title">No dashboard yet</div>
-        <div class="empty-state-text">Generate a dashboard first, then edit the code here.</div>
-      </div>
-    `;
+        <div class="empty-state-title">No queries</div>
+        <div class="empty-state-text">This page has no declared queries.</div>
+      </div>`;
     return;
   }
 
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const extensions = [
-    basicSetup,
-    html(),
-    EditorView.lineWrapping,
-    EditorView.updateListener.of(update => {
-      if (update.docChanged) handleChange(update.state.doc.toString());
-    }),
-  ];
-  if (prefersDark) extensions.push(oneDark);
+  listEl.innerHTML = Object.entries(page.queries).map(([name, sql]) => {
+    const preview = sql.replace(/\s+/g, ' ').trim().slice(0, 72);
+    return `<div class="query-item" data-query="${name}">
+      <div class="query-item-name">${escHtml(name)}</div>
+      <div class="query-item-sql">${escHtml(preview)}${sql.length > 72 ? '…' : ''}</div>
+    </div>`;
+  }).join('');
 
-  editorView = new EditorView({
-    state: EditorState.create({ doc: currentPage.html || '', extensions }),
-    parent: mount,
+  listEl.querySelectorAll('.query-item').forEach(item => {
+    item.addEventListener('click', () => {
+      if (callbacks.onViewQuery) callbacks.onViewQuery(item.dataset.query);
+    });
   });
 }
 
-function handleChange(newContent) {
-  clearTimeout(changeTimeout);
-  changeTimeout = setTimeout(() => {
-    if (!currentPage || !onHTMLChange) return;
-    onHTMLChange(currentPage.id, newContent);
-  }, 500);
+function escHtml(str) {
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-/**
- * Get the current editor content.
- */
-export function getEditorContent() {
-  return editorView ? editorView.state.doc.toString() : '';
-}
+// ── SQL Drawer ────────────────────────────────────────────────
 
-// ─── SQL Drawer ───────────────────────────────────────────────
-
-/**
- * Mount the SQL drawer inside the preview panel element.
- * The drawer slides up from the bottom when a visualization is clicked.
- *
- * @param {HTMLElement} previewPanelEl - The preview panel container
- * @param {object} callbacks - { onApply(queryName, sqlText) }
- */
-export function mountSQLDrawer(previewPanelEl, callbacks) {
-  onSQLApply = callbacks.onApply;
+export function mountSQLDrawer(previewPanelEl, cbs) {
+  onSQLApply = cbs.onApply;
 
   const drawer = document.createElement('div');
   drawer.className = 'sql-drawer';
@@ -133,8 +102,7 @@ export function mountSQLDrawer(previewPanelEl, callbacks) {
   drawer.innerHTML = `
     <div class="sql-drawer-header">
       <div class="sql-drawer-title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             width="14" height="14" style="flex-shrink:0">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" style="flex-shrink:0">
           <ellipse cx="12" cy="6" rx="8" ry="3"/>
           <path d="M4 6v6c0 1.66 3.58 3 8 3s8-1.34 8-3V6"/>
           <path d="M4 12v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/>
@@ -146,15 +114,13 @@ export function mountSQLDrawer(previewPanelEl, callbacks) {
         <button class="sql-drawer-close" id="sql-drawer-close" title="Close">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"
                stroke-linecap="round" width="14" height="14">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
           </svg>
         </button>
       </div>
     </div>
     <div class="sql-drawer-editor" id="sql-drawer-editor"></div>
   `;
-
   previewPanelEl.appendChild(drawer);
   drawerEl = drawer;
 
@@ -165,45 +131,27 @@ export function mountSQLDrawer(previewPanelEl, callbacks) {
   });
 }
 
-/**
- * Open the SQL drawer for a specific query.
- *
- * @param {string} queryName - The query identifier
- * @param {string} sqlText - The current SQL for this query
- */
 export function openSQLDrawer(queryName, sqlText) {
   if (!drawerEl) return;
-
   drawerQueryName = queryName;
-  drawerEl.querySelector('#sql-drawer-query-name').textContent = queryName;
-  drawerEl.classList.add('open');
+
+  const nameEl = drawerEl.querySelector('#sql-drawer-query-name');
+  if (nameEl) nameEl.textContent = queryName;
 
   const mount = drawerEl.querySelector('#sql-drawer-editor');
-  if (drawerEditorView) {
-    drawerEditorView.destroy();
-    drawerEditorView = null;
-  }
+  if (drawerEditorView) { drawerEditorView.destroy(); drawerEditorView = null; }
 
-  const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
   const extensions = [basicSetup, sql(), EditorView.lineWrapping];
-  if (prefersDark) extensions.push(oneDark);
+  if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) extensions.push(oneDark);
 
   drawerEditorView = new EditorView({
     state: EditorState.create({ doc: sqlText || '', extensions }),
     parent: mount,
   });
-  drawerEditorView.focus();
+
+  drawerEl.classList.add('open');
 }
 
-/**
- * Close the SQL drawer.
- */
 export function closeSQLDrawer() {
-  if (!drawerEl) return;
-  drawerEl.classList.remove('open');
-  if (drawerEditorView) {
-    drawerEditorView.destroy();
-    drawerEditorView = null;
-  }
-  drawerQueryName = null;
+  if (drawerEl) drawerEl.classList.remove('open');
 }
