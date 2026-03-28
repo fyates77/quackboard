@@ -331,10 +331,16 @@ function handlePageNavigate(pageId, params) {
 }
 
 /**
- * Handle data tables changing.
+ * Handle data tables changing — re-render the current dashboard if one exists,
+ * so that a project restored from localStorage picks up newly-uploaded data.
  */
 function handleTablesChanged(tables) {
   console.log(`${tables.length} table(s) loaded.`);
+  const state = getState();
+  if (state.hasProject && state.currentPage) {
+    const params = { ...(state.currentPage._params || {}), ...currentFilterValues };
+    renderProject(state.project, state.currentPageIndex, params);
+  }
 }
 
 /**

@@ -75,6 +75,11 @@ function escHtml(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** JSON.stringify that escapes </script> so it's safe inside an HTML <script> block. */
+function safeJSON(value) {
+  return JSON.stringify(value).replace(/<\//g, '<\\/');
+}
+
 function hexToRgbaSandbox(hex, alpha) {
   if (!hex || hex[0] !== '#') return hex;
   const r = parseInt(hex.slice(1, 3), 16);
@@ -308,7 +313,7 @@ function buildIframeDocument(page, queryResults, params, resolvedQueries) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"><\/script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" crossorigin="anonymous"><\/script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:#fafaf8;color:#1a1a18;font-size:14px;line-height:1.5}
@@ -341,17 +346,17 @@ table.striped tbody tr:nth-child(even){background:rgba(0,0,0,.025)}
 </style>
 <style id="qb-theme">${currentThemeCSS}</style>
 <script>
-window.__qbRawData=${JSON.stringify(queryResults)};
-window.__qbVisualOverrides=${JSON.stringify(visualOverrides)};
-window.__qbOriginalSQL=${JSON.stringify(resolvedQueries)};
-window.__qbPageSpec=${JSON.stringify({ visuals, layout })};
+window.__qbRawData=${safeJSON(queryResults)};
+window.__qbVisualOverrides=${safeJSON(visualOverrides)};
+window.__qbOriginalSQL=${safeJSON(resolvedQueries)};
+window.__qbPageSpec=${safeJSON({ visuals, layout })};
 window.__qbCrossFilters={};
 window.__qbCharts={};
 window.quackboard={
-  data:${JSON.stringify(queryResults)},
+  data:${safeJSON(queryResults)},
   query:function(sql){return new Promise(function(resolve,reject){var id='q_'+Math.random().toString(36).substr(2,9);window.__pendingQueries=window.__pendingQueries||{};window.__pendingQueries[id]={resolve:resolve,reject:reject};window.parent.postMessage({type:'quackboard_query',id:id,sql:sql},'*');});},
   navigate:function(pageId,params){window.parent.postMessage({type:'quackboard_navigate',pageId:pageId,params:params||{}},'*');},
-  getParams:function(){return ${JSON.stringify(params)};}
+  getParams:function(){return ${safeJSON(params)};}
 };
 window.addEventListener('message',function(event){
   if(!event.data)return;
