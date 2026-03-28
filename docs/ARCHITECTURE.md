@@ -1,138 +1,319 @@
-# Quackboard architecture
+# Quackboard — Architecture
 
-## How it all fits together
+## Overview
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Browser                                            │
-│                                                     │
-│  ┌───────────┐  ┌──────────────────────────────┐   │
-│  │ Data      │  │ Main area                     │   │
-│  │ panel     │  │                               │   │
-│  │           │  │ ┌──────────────────────────┐  │   │
-│  │ Upload    │  │ │ Prompt bar               │  │   │
-│  │ files     │  │ └──────────────────────────┘  │   │
-│  │           │  │                               │   │
-│  │ View      │  │ ┌────────────┬─────────────┐  │   │
-│  │ schemas   │  │ │ Code       │ Live         │  │   │
-│  │           │  │ │ editor     │ preview      │  │   │
-│  │           │  │ │ (Monaco)   │ (iframe)     │  │   │
-│  │           │  │ │            │              │  │   │
-│  └───────────┘  │ └────────────┴─────────────┘  │   │
-│                 └──────────────────────────────┘   │
-│                                                     │
-│  ┌─────────────────────────────────────────────┐   │
-│  │ DuckDB-WASM (runs entirely in the browser)  │   │
-│  └─────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  Browser                                                        │
+│                                                                 │
+│  ┌────────────┐  ┌──────────────────────────────────────────┐  │
+│  │ Data panel │  │ Main area                                │  │
+│  │            │  │                                          │  │
+│  │ Upload     │  │ ┌──────────────────────────────────────┐ │  │
+│  │ CSV/JSON/  │  │ │ Prompt bar (AI generation/refinement)│ │  │
+│  │ Parquet    │  │ └──────────────────────────────────────┘ │  │
+│  │            │  │                                          │  │
+│  │ View table │  │ ┌─────────────┬────────────────────────┐ │  │
+│  │ schemas    │  │ │ SQL query   │  Preview (iframe)      │ │  │
+│  │            │  │ │ list panel  │                        │ │  │
+│  │            │  │ │             │  ┌──────────────────┐  │ │  │
+│  │            │  │ │ Click any   │  │ Filter bar       │  │ │  │
+│  │            │  │ │ query →     │  ├──────────────────┤  │ │  │
+│  │            │  │ │ SQL drawer  │  │ Dashboard grid   │  │ │  │
+│  │            │  │ │             │  │ (12-col CSS grid)│  │ │  │
+│  │            │  │ │             │  │                  │  │ │  │
+│  └────────────┘  │ └─────────────┤  └──────────────────┘  │ │  │
+│                  │               │  Visual editor panel → │ │  │
+│                  │               └────────────────────────┘ │  │
+│                  └──────────────────────────────────────────┘  │
+│                                                                 │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │  DuckDB-WASM (WebWorker — all data stays in browser)     │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Core design principle: spec-driven rendering
+
+The AI does **not** generate HTML or JavaScript. It generates a **structured spec**:
+
+```
+queries   →  SQL strings (DuckDB handles all aggregation)
+visuals   →  { type, query, column bindings, title, color }
+layout    →  { visual_id, w: 1–12 } (12-column grid)
+filters   →  { id, type, optionsQuery, default }
+```
+
+The app's renderer (`sandbox.js`) reads the spec and builds the complete iframe document deterministically. This means:
+
+- Every visual is fully understood by the app (type, column mappings, query)
+- Editing is reliable — no reverse-engineering of AI-generated code
+- Cross-filtering is precise — the app knows which column each visual uses
+- Style overrides persist correctly — they map to spec fields the renderer uses
+
+---
 
 ## Data flow
 
-1. User drops a CSV/Parquet/JSON file onto the data panel.
-2. `engine/duckdb.js` loads the file into DuckDB-WASM as a table.
-3. The sidebar shows the table name, row count, and column types.
-4. User types a prompt like "Show me monthly revenue with a drill-down by product."
-5. `engine/ai.js` builds a system prompt that includes:
-   - All loaded table schemas (column names, types, sample rows)
-   - Instructions for generating a multi-page HTML dashboard
-   - The output contract (JSON with pages, queries, and HTML)
-6. The AI responds with a JSON project containing one or more pages.
-7. `engine/project.js` stores the project and notifies all components.
-8. `engine/sandbox.js` renders the first page in the preview iframe:
-   - Pre-executes all declared SQL queries via DuckDB
-   - Injects the results + a bridge API into the iframe
-   - The bridge lets generated JS run ad-hoc queries (for filters, etc.)
-9. `components/editor-panel.js` loads the page's HTML and SQL into CodeMirror.
-10. User can edit code → changes are debounced → preview refreshes live.
-11. User can re-prompt → AI receives the existing project + new instruction → patches it.
-
-## The bridge API
-
-Generated code inside the iframe communicates with the main app
-through `window.quackboard`:
-
-```javascript
-// Pre-fetched data (available immediately)
-const { columns, rows } = quackboard.data.my_query_name;
-
-// Run an ad-hoc query (for dynamic filters)
-const result = await quackboard.query("SELECT * FROM sales WHERE region = 'West'");
-// result = { columns: ['id', 'amount', ...], rows: [[1, 500, ...], ...] }
-
-// Navigate to another page
-quackboard.navigate('product_detail', { product_id: 42 });
-
-// Get current page parameters
-const params = quackboard.getParams();
-// params = { product_id: 42 }
+```
+User prompt
+    │
+    ▼
+engine/ai.js
+  buildSystemPrompt(schemaContext, relationships)
+    │  includes: table schemas, sample rows, join hints
+    ▼
+  LLM API (Anthropic / OpenAI)
+    │  returns: JSON spec { pages, navigation }
+    ▼
+  validateProject(project)
+    │  checks: visuals exist, layout valid, queries non-empty,
+    │          column fields present, filter types valid
+    ▼
+engine/project.js  setProject(project)
+    │  saves to localStorage, notifies subscribers
+    ▼
+app.js  handleStateChange(state)
+    │  pre-seeds filter defaults, calls renderProject
+    ▼
+components/preview-panel.js  renderProject(project, pageIndex, params)
+    │
+    ▼
+engine/sandbox.js  renderPage(page, params)
+  1. Run page queries sequentially against DuckDB
+     (sequential to avoid single-connection contention)
+  2. Replace {{param}} placeholders with escaped values
+  3. Build iframe document from spec + results
+    │
+    ▼
+  buildIframeDocument(page, queryResults, params, resolvedQueries)
+    │  generates: CSS grid, visual card HTML, Chart.js init scripts
+    │  injects:   bridge API, raw data, visual overrides, page spec
+    ▼
+  iframe.srcdoc = fullHTML
 ```
 
-## Multi-page model
+---
 
-A "dashboard project" is a JSON object:
+## Dashboard spec schema
 
-```json
-{
-  "pages": [
-    {
-      "id": "overview",
-      "title": "Sales overview",
-      "queries": {
-        "monthly_revenue": "SELECT month, SUM(amount) as revenue FROM sales GROUP BY month",
-        "top_products": "SELECT product, SUM(amount) as total FROM sales GROUP BY product ORDER BY total DESC LIMIT 10"
-      },
-      "html": "<style>...</style><div>...</div><script>...</script>",
-      "description": "High-level KPIs and monthly trend"
-    },
-    {
-      "id": "product_detail",
-      "title": "Product detail",
-      "queries": {
-        "product_sales": "SELECT * FROM sales WHERE product_id = {{product_id}}"
-      },
-      "html": "...",
-      "description": "Deep dive into a specific product"
-    }
-  ],
-  "navigation": [
-    {
-      "from": "overview",
-      "to": "product_detail",
-      "trigger": "Click a row in the top products table",
-      "params": ["product_id"]
-    }
-  ]
+```typescript
+interface Project {
+  pages:      Page[];
+  navigation: NavLink[];
+}
+
+interface Page {
+  id:          string;
+  title:       string;
+  description: string;
+  queries:     Record<string, string>;   // name → SQL
+  visuals:     Visual[];
+  layout:      LayoutItem[];
+  filters?:    Filter[];
+}
+
+interface Visual {
+  id:           string;
+  type:         'bar' | 'line' | 'area' | 'pie' | 'kpi' | 'table';
+  query:        string;           // key in page.queries
+  title?:       string;
+  // bar/line/area
+  x?:           string;           // x-axis column
+  y?:           string | string[];// y-axis column(s)
+  // pie
+  label?:       string;           // slice label column
+  value?:       string;           // slice value column (also kpi)
+  // kpi
+  format?:      'number' | 'currency' | 'percent' | 'integer';
+  // table
+  columns?:     string[];         // subset of columns to display
+  // styling (also controlled via visual editor)
+  color?:       string;
+  showLegend?:  boolean;
+  crossFilter?: boolean;
+}
+
+interface LayoutItem {
+  id: string;   // references Visual.id
+  w:  number;   // 1–12 column width
+}
+
+interface Filter {
+  id:            string;
+  label:         string;
+  type:          'select' | 'date' | 'number' | 'text';
+  default:       string;
+  optionsQuery?: string;   // required for type: 'select'
 }
 ```
 
-Pages are rendered one at a time. Navigation swaps the active page
-in the iframe and re-executes that page's queries with the provided params.
+---
+
+## Iframe document structure
+
+```html
+<!DOCTYPE html>
+<html>
+<head>
+  <script src="Chart.js CDN"></script>
+  <style>/* grid, cards, tables, KPIs, error states */</style>
+  <style id="qb-theme">/* theme overrides injected by parent */</style>
+  <script>
+    window.__qbRawData        = { queryName: { columns, rows } };
+    window.__qbVisualOverrides= { visualId: { chartColor, ... } };
+    window.__qbOriginalSQL    = { queryName: 'SELECT ...' };
+    window.__qbPageSpec       = { visuals, layout };
+    window.__qbCrossFilters   = {};
+    window.__qbCharts         = {};  // visualId → Chart instance (set by init scripts)
+
+    window.quackboard = { data, query(), navigate(), getParams() };
+
+    // Message handlers: query_result, update_theme, apply_cross_filter,
+    //                   apply_visual_override
+  </script>
+</head>
+<body>
+  <div class="dashboard-grid">
+    <!-- Visual cards (static HTML rendered by app) -->
+    <div class="visual-card" data-visual-id="rev_chart" data-qb-query="revenue_by_month"
+         style="grid-column: span 8">
+      <div class="visual-header"><span class="visual-title">Revenue by Month</span></div>
+      <div class="visual-body"><canvas id="chart-rev_chart"></canvas></div>
+    </div>
+    <!-- more cards ... -->
+  </div>
+  <script>
+  (function() {
+    // Chart.js init IIFEs (one per chart/pie visual)
+    // Each wrapped in try-catch — errors show in card, can't cascade
+    (function() {
+      try {
+        var canvas = document.getElementById('chart-rev_chart');
+        var d = window.__qbRawData['revenue_by_month'];
+        var xIdx = d.columns.indexOf('month');
+        window.__qbCharts['rev_chart'] = new Chart(canvas, { ... });
+        // cross-filter click handler if visual.crossFilter is true
+      } catch(err) { /* show error in card */ }
+    }());
+
+    // Edit SQL + Style button injection (runs in setTimeout to let charts init first)
+    // Table cross-filter click handlers
+    // window.__qbApplyCrossFilters — updates all non-source visuals on filter change
+    // window.__qbApplyOverride — applies live style overrides (color, type, etc.)
+  }());
+  </script>
+</body>
+</html>
+```
+
+---
+
+## postMessage protocol
+
+| Direction | Type | Payload | Description |
+|-----------|------|---------|-------------|
+| iframe → parent | `quackboard_query` | `{ id, sql }` | Execute SQL in DuckDB |
+| parent → iframe | `quackboard_query_result` | `{ id, result?, error? }` | Query result |
+| iframe → parent | `quackboard_navigate` | `{ pageId, params }` | Navigate to page |
+| iframe → parent | `quackboard_view_query` | `{ queryName }` | Open SQL drawer |
+| iframe → parent | `quackboard_select_visual` | `{ info }` | Open visual editor |
+| iframe → parent | `quackboard_deselect_visual` | — | Close visual editor |
+| iframe → parent | `quackboard_cross_filter` | `{ queryName, column, value }` | Toggle cross-filter |
+| parent → iframe | `quackboard_apply_cross_filter` | `{ filters }` | Apply/clear cross-filters |
+| parent → iframe | `quackboard_apply_visual_override` | `{ visualId, overrides }` | Live style update |
+| parent → iframe | `quackboard_update_theme` | `{ css }` | Inject global CSS |
+
+---
+
+## Visual overrides
+
+Overrides let the visual editor apply style changes instantly without re-rendering the page. They live in `sandbox.js` module state (`visualOverrides`) keyed by `visualId`.
+
+On render, overrides are baked into the card's `style` attribute and chart init config. When the user changes a style in the editor:
+
+1. `applyVisualOverridesToIframe(visualId, overrides)` — live update via postMessage
+2. `setVisualOverride(visualId, overrides)` — stored in module state for next render
+3. `updateVisual(pageId, visualId, changes)` — spec fields updated (color, type, legend) so changes survive page navigation
+4. Persisted to `localStorage` under `quackboard_overrides`
+
+---
+
+## Cross-filtering
+
+```
+User clicks bar in "rev_chart" (crossFilter: true)
+    │
+    ▼ iframe sends quackboard_cross_filter { queryName: 'rev_chart', column: 'month', value: '2024-03' }
+    │
+    ▼ sandbox.js handleMessage
+      activeCrossFilters['month'] = { queryName: 'rev_chart', value: '2024-03' }
+      postMessage quackboard_apply_cross_filter { filters: activeCrossFilters }
+    │
+    ▼ iframe __qbApplyCrossFilters(filters)
+      for each non-source visual:
+        if visual's query result has 'month' column:
+          SELECT * FROM (<original_sql>) __qb_cf WHERE "month" = '2024-03'
+          update Chart.js instance via __qbCharts[visualId]
+          or rebuild table tbody rows
+```
+
+Clicking the same bar again removes that column from `activeCrossFilters` and restores original data from `window.__qbRawData`.
+
+Cross-filtering requires consistent column names across related queries — the app matches on column name, not position.
+
+---
+
+## Filter bar
+
+Page-level filters live in `components/filter-bar.js`. On page load:
+
+1. `renderFilters(page.filters, onchange)` renders the filter controls
+2. `select` filters run their `optionsQuery` against DuckDB to populate options
+3. Filter options load **after** the page renders (to avoid DuckDB contention)
+4. On any filter change, `handleFilterChange(values)` merges values into params and calls `renderProject` to re-render the page with new SQL substitutions
+
+---
 
 ## Security model
 
-- Generated HTML runs in an iframe with `sandbox="allow-scripts allow-modals"`.
-- The iframe has NO access to the parent window's DOM, localStorage, or DuckDB.
-- All SQL queries go through `postMessage` → the parent executes them → sends results back.
-- There is no network access from the iframe (no `allow-same-origin`).
+- Iframe sandbox: `allow-scripts allow-modals` only — no DOM access to parent, no `localStorage`, no network fetch
+- All DuckDB access goes through `postMessage` → parent executes → returns results
+- SQL values are escaped via `escapeSQL()` before substitution
+- AI-generated SQL never runs in the parent context directly (only via `runQuery` which validates the connection)
 
-## File structure
+---
+
+## File reference
 
 ```
 src/
-├── main.js              Entry point, imports CSS, boots app
-├── app.js               Shell layout, wires components together
+├── main.js                  Entry point — imports CSS, calls initApp()
+├── app.js                   Shell — mounts all components, handles state changes,
+│                            wires prompt → generation → render → edit cycle
 ├── engine/
-│   ├── duckdb.js        DuckDB-WASM init, file loading, query execution
-│   ├── ai.js            Prompt construction + LLM API calls
-│   ├── sandbox.js       Iframe rendering + postMessage bridge
-│   └── project.js       State management, save/load, navigation
-├── components/
-│   ├── data-panel.js    Sidebar: file upload, table schema display
-│   ├── prompt-bar.js    Text input for AI prompts
-│   ├── editor-panel.js  CodeMirror 6 editor with HTML/SQL tabs
-│   ├── preview-panel.js Iframe preview with page tabs
-│   └── settings-modal.js API key + provider configuration
-└── styles/
-    └── main.css         All styles (design tokens, layout, components)
+│   ├── ai.js                buildSystemPrompt, generateDashboard, validateProject
+│   │                        Calls Anthropic/OpenAI API, parses + validates JSON response
+│   ├── duckdb.js            initDuckDB, loadFile, runQuery, getSchemaContext,
+│   │                        detectRelationships, normalizeValue (Arrow → JS primitives)
+│   ├── sandbox.js           renderPage, buildIframeDocument, all renderer helpers
+│   │                        (buildChartJS, buildPieJS, buildTableHTML, buildKPIHTML)
+│   │                        postMessage bridge, visual overrides, cross-filter state
+│   └── project.js           Project state machine — setProject, navigateToPage,
+│                            updatePageQueries, updateVisual, loadFromStorage,
+│                            exportProject, localStorage persistence
+└── components/
+    ├── data-panel.js         File drag-and-drop → loadFile → schema display
+    ├── prompt-bar.js         Text input, generating spinner
+    ├── editor-panel.js       SQL query list (left panel) + SQL drawer (slide-up,
+    │                         CodeMirror 6 editor)
+    ├── preview-panel.js      Toolbar, page tabs, filter bar slot, iframe
+    ├── filter-bar.js         Renders filter controls, runs optionsQuery for selects,
+    │                         fires onchange with current filter values
+    ├── visual-editor-panel.js Style panel (slide-in from right) with Interactions,
+    │                         Chart, Table, and Card sections
+    ├── quick-edit-panel.js   Global CSS theme injector (kept, not currently surfaced)
+    └── settings-modal.js     Provider + API key + model selection
 ```
