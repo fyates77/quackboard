@@ -13,6 +13,22 @@ import { runQuery } from './duckdb.js';
 const CHART_COLORS = ['#e85d24', '#378add', '#1d9e75', '#ba7517', '#e24b4a', '#8b5cf6'];
 const PIE_COLORS   = ['#e85d24', '#378add', '#1d9e75', '#ba7517', '#e24b4a', '#8b5cf6', '#06b6d4', '#84cc16'];
 
+// ── Chart.js source cache (fetched once, inlined into every srcdoc) ───
+const CHARTJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js';
+let chartJSInline = ''; // populated by ensureChartJS()
+
+async function ensureChartJS() {
+  if (chartJSInline) return;
+  try {
+    const resp = await fetch(CHARTJS_CDN);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    // Escape </ so the inlined source can't accidentally close the <script> tag.
+    chartJSInline = (await resp.text()).replace(/<\//g, '<\\/');
+  } catch (err) {
+    console.error('Failed to fetch Chart.js — charts will not render:', err);
+  }
+}
+
 // ── Module state ──────────────────────────────────────────────
 let currentIframe          = null;
 let currentPageId          = null;
@@ -38,6 +54,8 @@ export function initSandbox(iframe, onNavigate, onViewQuery, onSelectVisual) {
 
 export async function renderPage(page, params = {}) {
   if (!currentIframe) throw new Error('Sandbox not initialised.');
+
+  await ensureChartJS();
 
   currentPageId      = page.id;
   currentParams      = params;
@@ -313,7 +331,7 @@ function buildIframeDocument(page, queryResults, params, resolvedQueries) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js" crossorigin="anonymous"><\/script>
+<script>${chartJSInline}<\/script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:#fafaf8;color:#1a1a18;font-size:14px;line-height:1.5}
