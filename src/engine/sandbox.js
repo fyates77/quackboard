@@ -43,10 +43,11 @@ export async function renderPage(page, params = {}) {
   currentParams      = params;
   activeCrossFilters = {};
 
-  // Run all queries in parallel, capturing resolved SQL for cross-filter use.
+  // Run queries sequentially — DuckDB-WASM uses a single connection and
+  // concurrent queries can cause empty results or phantom errors.
   const resolvedQueries = {};
-  const entries  = Object.entries(page.queries);
-  const settled  = await Promise.all(entries.map(async ([name, sql]) => {
+  const queryResults    = {};
+  for (const [name, sql] of Object.entries(page.queries)) {
     let resolvedSQL = sql;
     for (const [key, value] of Object.entries(params)) {
       resolvedSQL = resolvedSQL.replaceAll(`{{${key}}}`, escapeSQL(value));
@@ -54,13 +55,12 @@ export async function renderPage(page, params = {}) {
     resolvedSQL = resolvedSQL.replace(/\{\{[^}]+\}\}/g, '');
     resolvedQueries[name] = resolvedSQL;
     try {
-      return [name, await runQuery(resolvedSQL)];
+      queryResults[name] = await runQuery(resolvedSQL);
     } catch (err) {
       console.error(`Query "${name}" failed:`, err);
-      return [name, { columns: [], rows: [], error: err.message }];
+      queryResults[name] = { columns: [], rows: [], error: err.message };
     }
-  }));
-  const queryResults = Object.fromEntries(settled);
+  }
 
   currentIframe.srcdoc = buildIframeDocument(page, queryResults, params, resolvedQueries);
 }
@@ -113,30 +113,41 @@ function buildChartJS(visual, data, ov) {
   }).join(',');
 
   return `(function(){
-var canvas=document.getElementById(${JSON.stringify('chart-' + vid)});
-if(!canvas)return;
-var d=window.__qbRawData[${JSON.stringify(qname)}];
-if(!d||!d.rows.length)return;
-var xIdx=d.columns.indexOf(${JSON.stringify(visual.x || '')});
-if(xIdx<0)return;
-window.__qbCharts[${JSON.stringify(vid)}]=new Chart(canvas,{
-  type:${JSON.stringify(type)},
-  data:{labels:d.rows.map(function(r){return r[xIdx];}),datasets:[${datasetsJS}]},
-  options:{responsive:true,maintainAspectRatio:false,
-    plugins:{legend:{display:${showLegend}},tooltip:{mode:'index',intersect:false}},
-    scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:30}},
-            y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:11}}}}}
-});
-canvas.addEventListener('click',function(e){
-  var ov2=(window.__qbVisualOverrides&&window.__qbVisualOverrides[${JSON.stringify(vid)}])||{};
-  var isCF=ov2.crossFilter!==undefined?ov2.crossFilter:${cfBaked};
-  if(!isCF)return;
-  var chart=window.__qbCharts[${JSON.stringify(vid)}];
-  if(!chart)return;
-  var pts=chart.getElementsAtEventForMode(e,'nearest',{intersect:true},false);
-  if(!pts.length)return;
-  window.parent.postMessage({type:'quackboard_cross_filter',queryName:${JSON.stringify(vid)},column:${JSON.stringify(visual.x || '')},value:String(chart.data.labels[pts[0].index])},'*');
-});
+try {
+  var canvas=document.getElementById(${JSON.stringify('chart-' + vid)});
+  if(!canvas)return;
+  var d=window.__qbRawData[${JSON.stringify(qname)}];
+  if(!d||!d.rows||!d.rows.length)return;
+  var xIdx=d.columns.indexOf(${JSON.stringify(visual.x || '')});
+  if(xIdx<0){
+    var em=document.createElement('div');em.className='qb-state-overlay qb-state-error';
+    em.innerHTML='<span class="qb-state-title">Column not found</span><span class="qb-state-detail">x: &quot;${escHtml(visual.x||'')}&quot; — available: '+d.columns.join(', ')+'</span>';
+    canvas.parentNode.replaceChild(em,canvas);return;
+  }
+  window.__qbCharts[${JSON.stringify(vid)}]=new Chart(canvas,{
+    type:${JSON.stringify(type)},
+    data:{labels:d.rows.map(function(r){return r[xIdx];}),datasets:[${datasetsJS}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:${showLegend}},tooltip:{mode:'index',intersect:false}},
+      scales:{x:{grid:{display:false},ticks:{font:{size:11},maxRotation:30}},
+              y:{grid:{color:'rgba(0,0,0,0.04)'},ticks:{font:{size:11}}}}}
+  });
+  canvas.addEventListener('click',function(e){
+    var ov2=(window.__qbVisualOverrides&&window.__qbVisualOverrides[${JSON.stringify(vid)}])||{};
+    var isCF=ov2.crossFilter!==undefined?ov2.crossFilter:${cfBaked};
+    if(!isCF)return;
+    var chart=window.__qbCharts[${JSON.stringify(vid)}];
+    if(!chart)return;
+    var pts=chart.getElementsAtEventForMode(e,'nearest',{intersect:true},false);
+    if(!pts.length)return;
+    window.parent.postMessage({type:'quackboard_cross_filter',queryName:${JSON.stringify(vid)},column:${JSON.stringify(visual.x || '')},value:String(chart.data.labels[pts[0].index])},'*');
+  });
+} catch(err) {
+  var em=document.createElement('div');em.className='qb-state-overlay qb-state-error';
+  em.innerHTML='<span class="qb-state-title">Chart error</span><span class="qb-state-detail">'+(err&&err.message?err.message:String(err))+'</span>';
+  var c=document.getElementById(${JSON.stringify('chart-'+vid)});
+  if(c&&c.parentNode)c.parentNode.replaceChild(em,c);
+}
 }());`;
 }
 
@@ -149,28 +160,39 @@ function buildPieJS(visual, data, ov) {
   const cfBaked  = visual.crossFilter ? 'true' : 'false';
 
   return `(function(){
-var canvas=document.getElementById(${JSON.stringify('chart-' + vid)});
-if(!canvas)return;
-var d=window.__qbRawData[${JSON.stringify(qname)}];
-if(!d||!d.rows.length)return;
-var lIdx=d.columns.indexOf(${JSON.stringify(labelCol)});
-var vIdx=d.columns.indexOf(${JSON.stringify(valueCol)});
-if(lIdx<0||vIdx<0)return;
-window.__qbCharts[${JSON.stringify(vid)}]=new Chart(canvas,{
-  type:'doughnut',
-  data:{labels:d.rows.map(function(r){return r[lIdx];}),datasets:[{data:d.rows.map(function(r){return r[vIdx];}),backgroundColor:${JSON.stringify(PIE_COLORS)},borderWidth:1,borderColor:'#fff'}]},
-  options:{responsive:true,maintainAspectRatio:false,cutout:'50%',plugins:{legend:{display:${showLeg},position:'right'},tooltip:{mode:'index'}}}
-});
-canvas.addEventListener('click',function(e){
-  var ov2=(window.__qbVisualOverrides&&window.__qbVisualOverrides[${JSON.stringify(vid)}])||{};
-  var isCF=ov2.crossFilter!==undefined?ov2.crossFilter:${cfBaked};
-  if(!isCF)return;
-  var chart=window.__qbCharts[${JSON.stringify(vid)}];
-  if(!chart)return;
-  var pts=chart.getElementsAtEventForMode(e,'nearest',{intersect:true},false);
-  if(!pts.length)return;
-  window.parent.postMessage({type:'quackboard_cross_filter',queryName:${JSON.stringify(vid)},column:${JSON.stringify(labelCol)},value:String(chart.data.labels[pts[0].index])},'*');
-});
+try {
+  var canvas=document.getElementById(${JSON.stringify('chart-' + vid)});
+  if(!canvas)return;
+  var d=window.__qbRawData[${JSON.stringify(qname)}];
+  if(!d||!d.rows||!d.rows.length)return;
+  var lIdx=d.columns.indexOf(${JSON.stringify(labelCol)});
+  var vIdx=d.columns.indexOf(${JSON.stringify(valueCol)});
+  if(lIdx<0||vIdx<0){
+    var em=document.createElement('div');em.className='qb-state-overlay qb-state-error';
+    em.innerHTML='<span class="qb-state-title">Column not found</span><span class="qb-state-detail">label: &quot;${escHtml(labelCol)}&quot; value: &quot;${escHtml(valueCol)}&quot; — available: '+d.columns.join(', ')+'</span>';
+    canvas.parentNode.replaceChild(em,canvas);return;
+  }
+  window.__qbCharts[${JSON.stringify(vid)}]=new Chart(canvas,{
+    type:'doughnut',
+    data:{labels:d.rows.map(function(r){return r[lIdx];}),datasets:[{data:d.rows.map(function(r){return r[vIdx];}),backgroundColor:${JSON.stringify(PIE_COLORS)},borderWidth:1,borderColor:'#fff'}]},
+    options:{responsive:true,maintainAspectRatio:false,cutout:'50%',plugins:{legend:{display:${showLeg},position:'right'},tooltip:{mode:'index'}}}
+  });
+  canvas.addEventListener('click',function(e){
+    var ov2=(window.__qbVisualOverrides&&window.__qbVisualOverrides[${JSON.stringify(vid)}])||{};
+    var isCF=ov2.crossFilter!==undefined?ov2.crossFilter:${cfBaked};
+    if(!isCF)return;
+    var chart=window.__qbCharts[${JSON.stringify(vid)}];
+    if(!chart)return;
+    var pts=chart.getElementsAtEventForMode(e,'nearest',{intersect:true},false);
+    if(!pts.length)return;
+    window.parent.postMessage({type:'quackboard_cross_filter',queryName:${JSON.stringify(vid)},column:${JSON.stringify(labelCol)},value:String(chart.data.labels[pts[0].index])},'*');
+  });
+} catch(err) {
+  var em=document.createElement('div');em.className='qb-state-overlay qb-state-error';
+  em.innerHTML='<span class="qb-state-title">Chart error</span><span class="qb-state-detail">'+(err&&err.message?err.message:String(err))+'</span>';
+  var c=document.getElementById(${JSON.stringify('chart-'+vid)});
+  if(c&&c.parentNode)c.parentNode.replaceChild(em,c);
+}
 }());`;
 }
 
@@ -212,14 +234,31 @@ function buildVisualParts(visual, data, ov, w) {
     bodyHTML = buildStateOverlay(data);
   } else {
     switch (visual.type) {
-      case 'bar': case 'line': case 'area':
-        bodyHTML = `<canvas id="chart-${visual.id}"></canvas>`;
-        js = buildChartJS(visual, data, ov);
+      case 'bar': case 'line': case 'area': {
+        const yCols  = Array.isArray(visual.y) ? visual.y : (visual.y ? [visual.y] : []);
+        const missingX = visual.x && !data.columns.includes(visual.x) ? visual.x : null;
+        const missingY = yCols.filter(y => !data.columns.includes(y));
+        if (missingX || missingY.length) {
+          const missing = [missingX, ...missingY].filter(Boolean).join('", "');
+          bodyHTML = buildStateOverlay({ error: `Column(s) "${missing}" not found in query result. Available: [${data.columns.join(', ')}]` });
+        } else {
+          bodyHTML = `<canvas id="chart-${visual.id}"></canvas>`;
+          js = buildChartJS(visual, data, ov);
+        }
         break;
-      case 'pie':
-        bodyHTML = `<canvas id="chart-${visual.id}"></canvas>`;
-        js = buildPieJS(visual, data, ov);
+      }
+      case 'pie': {
+        const missingL = visual.label && !data.columns.includes(visual.label) ? visual.label : null;
+        const missingV = visual.value && !data.columns.includes(visual.value) ? visual.value : null;
+        if (missingL || missingV) {
+          const missing = [missingL, missingV].filter(Boolean).join('", "');
+          bodyHTML = buildStateOverlay({ error: `Column(s) "${missing}" not found. Available: [${data.columns.join(', ')}]` });
+        } else {
+          bodyHTML = `<canvas id="chart-${visual.id}"></canvas>`;
+          js = buildPieJS(visual, data, ov);
+        }
         break;
+      }
       case 'table':
         bodyHTML = buildTableHTML(visual, data, ov);
         break;
@@ -337,7 +376,10 @@ ${gridHTML}
 </div>
 <script>
 (function(){
-${initJS}
+// ── Chart initialisation ──────────────────────────────────
+// Each visual is a self-contained IIFE with try-catch.
+// Errors are shown inside the card and cannot affect other visuals.
+try { (function(){ ${initJS} }()); } catch(e) { console.error('Chart init error:', e); }
 
 function rgbToHex(rgb){var m=rgb&&rgb.match(/^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/);if(!m)return null;return'#'+[m[1],m[2],m[3]].map(function(x){return('0'+parseInt(x).toString(16)).slice(-2);}).join('');}
 function hexRgba(hex,a){var r=parseInt(hex.slice(1,3),16),g=parseInt(hex.slice(3,5),16),b=parseInt(hex.slice(5,7),16);return'rgba('+r+','+g+','+b+','+a+')';}
