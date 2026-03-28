@@ -238,6 +238,21 @@ export async function detectRelationships() {
 }
 
 /**
+ * Returns true if at least one user table is loaded in DuckDB.
+ */
+export async function hasLoadedTables() {
+  if (!conn) return false;
+  try {
+    const result = await conn.query(
+      `SELECT count(*) as cnt FROM information_schema.tables WHERE table_schema = 'main'`
+    );
+    return Number(result.toArray()[0].cnt) > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * Get the raw DuckDB connection for advanced use.
  */
 export function getConnection() {

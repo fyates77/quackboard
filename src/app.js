@@ -5,7 +5,7 @@
  * editor, preview, and settings. Manages the generation flow.
  */
 
-import { initDuckDB } from './engine/duckdb.js';
+import { initDuckDB, hasLoadedTables } from './engine/duckdb.js';
 import { generateDashboard } from './engine/ai.js';
 import {
   setProject,
@@ -230,6 +230,15 @@ async function handleStateChange(state) {
   if (!state.hasProject || !state.currentPage) return;
 
   setEditorPage(state.currentPage);
+
+  // Skip rendering if no data tables are loaded yet — the project was
+  // restored from localStorage but DuckDB is empty (in-memory, tables
+  // don't persist across reloads). Rendering will be triggered
+  // automatically once the user uploads data via handleTablesChanged.
+  if (!(await hasLoadedTables())) {
+    showToast('Upload your data files to render this dashboard.', 'info');
+    return;
+  }
 
   const pageChanged = state.currentPage.id !== lastRenderedPageId;
   if (pageChanged) {
